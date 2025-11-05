@@ -9,7 +9,7 @@ async fn main() -> Result<(), eframe::Error> {
     env_logger::init();
 
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([500.0, 600.0]),
+        viewport: egui::ViewportBuilder::default().with_inner_size([1000.0, 800.0]),
         ..Default::default()
     };
 

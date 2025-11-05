@@ -128,6 +128,11 @@ pub struct RobotTab {
     get_all_transforms_promise: Option<Promise<HashMap<String, SPTransformStamped>>>,
     transform_keys: Vec<String>,
     selected_pose: Option<String>,
+    tcp_keys: Vec<String>,
+    selected_tcp: Option<String>,
+    selected_faceplate: Option<String>,
+    selected_baseframe: Option<String>,
+    selected_root: Option<String>,
 
     // --- Command State ---
     command_type: CommandType,
@@ -159,6 +164,11 @@ impl RobotTab {
             get_all_transforms_promise: None,
             transform_keys: Vec::new(),
             selected_pose: None,
+            tcp_keys: Vec::new(),
+            selected_tcp: None,
+            selected_faceplate: Some("tool0".to_string()),
+            selected_baseframe: Some("base_link".to_string()),
+            selected_root: Some("world".to_string()),
             // --- Command State ---
             command_type: CommandType::MoveL,
             acceleration: 0.1,
@@ -202,7 +212,7 @@ impl RobotTab {
                 // --- Group 1: Pose & Motion (Left Column) ---
                 ui.vertical(|ui| {
                     ui.set_min_width(250.0); // Ensure column has a reasonable width
-                    ui.heading("Pose & Motion");
+                    ui.heading("Pose Config");
                     ui.horizontal(|ui| {
                         let is_fetching_list = self.poll_transforms_promise(ui);
                         if !is_fetching_list && ui.button("Fetch Transforms").clicked() {
@@ -215,29 +225,39 @@ impl RobotTab {
 
                     draw_pose_selector(
                         ui,
-                        "Target Pose:",
+                        "Goal Feature ID (Where to go):",
                         "pose_select",
                         &mut self.selected_pose,
                         &self.transform_keys,
                     );
-
-                    ui.horizontal(|ui| {
-                        ui.label("Acceleration:");
-                        ui.add(
-                            egui::DragValue::new(&mut self.acceleration)
-                                .suffix(" m/s²")
-                                .speed(0.01),
-                        );
-                    });
-
-                    ui.horizontal(|ui| {
-                        ui.label("Velocity:");
-                        ui.add(
-                            egui::DragValue::new(&mut self.velocity)
-                                .suffix(" m/s")
-                                .speed(0.01),
-                        );
-                    });
+                    draw_pose_selector(
+                        ui,
+                        "TCP ID (With what frame):",
+                        "tcp_select",
+                        &mut self.selected_tcp,
+                        &self.transform_keys,
+                    );
+                    draw_pose_selector(
+                        ui,
+                        "Faceplate ID (Robot's final link):",
+                        "faceplate_select",
+                        &mut self.selected_faceplate,
+                        &self.transform_keys,
+                    );
+                    draw_pose_selector(
+                        ui,
+                        "Baseframe ID (base or base_link):",
+                        "baseframe_select",
+                        &mut self.selected_baseframe,
+                        &self.transform_keys,
+                    );
+                    draw_pose_selector(
+                        ui,
+                        "Root ID (Max IK root):",
+                        "root_select",
+                        &mut self.selected_root,
+                        &self.transform_keys,
+                    );
                 });
 
                 // --- Vertical Separator ---
@@ -246,7 +266,7 @@ impl RobotTab {
                 // --- Group 2: Command Config (Right Column) ---
                 ui.vertical(|ui| {
                     ui.set_min_width(250.0); // Ensure column has a reasonable width
-                    ui.heading("Command Config");
+                    ui.heading("Motion Config");
                     ui.horizontal(|ui| {
                         ui.label("Command Type:");
                         egui::ComboBox::from_id_salt("command_type_select")
@@ -263,7 +283,27 @@ impl RobotTab {
                     });
 
                     ui.horizontal(|ui| {
-                        ui.label("Global Accel Scaling:");
+                        ui.label("Acceleration:");
+                        ui.add(
+                            egui::DragValue::new(&mut self.acceleration)
+                                .suffix(" m/s²")
+                                .speed(0.01)
+                                .range(0.0..=1.0),
+                        );
+                    });
+
+                    ui.horizontal(|ui| {
+                        ui.label("Velocity:");
+                        ui.add(
+                            egui::DragValue::new(&mut self.velocity)
+                                .suffix(" m/s")
+                                .speed(0.01)
+                                .range(0.0..=1.0),
+                        );
+                    });
+
+                    ui.horizontal(|ui| {
+                        ui.label("Global Acceleration Scaling:");
                         ui.add(
                             egui::DragValue::new(&mut self.global_acceleration_scaling)
                                 .suffix(" (0.0-1.0)")
@@ -273,26 +313,13 @@ impl RobotTab {
                     });
 
                     ui.horizontal(|ui| {
-                        ui.label("Global Velo Scaling:");
+                        ui.label("Global Velocity Scaling:");
                         ui.add(
                             egui::DragValue::new(&mut self.global_velocity_scaling)
                                 .suffix(" (0.0-1.0)")
                                 .speed(0.01)
                                 .range(0.0..=1.0),
                         );
-                    });
-
-                    ui.checkbox(&mut self.use_execution_time, "Use Execution Time");
-
-                    ui.add_enabled_ui(self.use_execution_time, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.label("Execution Time:");
-                            ui.add(
-                                egui::DragValue::new(&mut self.execution_time_ms)
-                                    .suffix(" ms")
-                                    .speed(10.0),
-                            );
-                        });
                     });
                 });
             });
@@ -302,7 +329,7 @@ impl RobotTab {
 
         // --- Bottom Section: Blend and Joint Configs ---
         // Allocate a fixed height for this section
-        ui.allocate_ui(egui::vec2(ui.available_width(), 260.0), |ui| {
+        ui.allocate_ui(egui::vec2(ui.available_width(), 100.0), |ui| {
             ui.horizontal_top(|ui| {
                 // --- Group 3: Blend & Joint Positions (Bottom-Left) ---
                 ui.vertical(|ui| {
@@ -371,79 +398,137 @@ impl RobotTab {
         // --- Bottom Section: Payload ---
         // Allocate a static height for this section
         ui.allocate_ui(egui::vec2(ui.available_width(), 260.0), |ui| {
-            ui.vertical(|ui| {
-                ui.heading("Payload (Optional)");
-                ui.checkbox(&mut self.use_payload, "Use Payload");
+            ui.horizontal_top(|ui| {
+                ui.vertical(|ui| {
+                    ui.heading("Payload (Optional)");
+                    ui.checkbox(&mut self.use_payload, "Use Payload");
 
-                // Everything in this section is disabled if `use_payload` is false
-                ui.add_enabled_ui(self.use_payload, |ui| {
-                    ui.checkbox(&mut self.set_manual_payload, "Set Manual Payload");
+                    // Everything in this section is disabled if `use_payload` is false
+                    ui.add_enabled_ui(self.use_payload, |ui| {
+                        ui.checkbox(&mut self.set_manual_payload, "Set Manual Payload");
 
-                    // --- Dropdown for saved payloads ---
-                    // Disabled if "Set Manual" is checked
-                    ui.add_enabled_ui(!self.set_manual_payload, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.label("Saved Payloads:");
-                            egui::ComboBox::from_id_salt("saved_payload_select")
-                                .selected_text(self.saved_payload.to_string())
-                                .show_ui(ui, |ui| {
-                                    for variant in SavedPayload::variants() {
-                                        ui.selectable_value(
-                                            &mut self.saved_payload,
-                                            variant.clone(),
-                                            variant.to_string(),
+                        // --- Dropdown for saved payloads ---
+                        // Disabled if "Set Manual" is checked
+                        ui.add_enabled_ui(!self.set_manual_payload, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label("Saved Payloads:");
+                                egui::ComboBox::from_id_salt("saved_payload_select")
+                                    .selected_text(self.saved_payload.to_string())
+                                    .show_ui(ui, |ui| {
+                                        for variant in SavedPayload::variants() {
+                                            ui.selectable_value(
+                                                &mut self.saved_payload,
+                                                variant.clone(),
+                                                variant.to_string(),
+                                            );
+                                        }
+                                    });
+                            });
+                        });
+
+                        // ui.separator();
+
+                        // --- Manual Payload Inputs ---
+                        // Enabled *only if* "Set Manual" is checked
+                        ui.add_enabled_ui(self.set_manual_payload, |ui| {
+                            egui::Frame::default()
+                                // .inner_margin(egui::Margin::same(5))
+                                // .stroke(egui::Stroke::new(1.0, egui::Color32::))
+                                .show(ui, |ui| {
+                                    ui.label("Manual Payload Configuration:");
+
+                                    ui.horizontal(|ui| {
+                                        ui.label("Mass (kg):");
+                                        ui.add(
+                                            egui::DragValue::new(&mut self.manual_payload.mass)
+                                                .speed(0.01)
+                                                .range(0.0..=f32::MAX),
                                         );
-                                    }
+                                    });
+
+                                    ui.label("Center of Gravity (m):");
+                                    ui.horizontal(|ui| {
+                                        ui.label("CoG X:");
+                                        ui.add(
+                                            egui::DragValue::new(&mut self.manual_payload.cog_x)
+                                                .speed(0.001),
+                                        );
+                                        ui.label("CoG Y:");
+                                        ui.add(
+                                            egui::DragValue::new(&mut self.manual_payload.cog_y)
+                                                .speed(0.001),
+                                        );
+                                        ui.label("CoG Z:");
+                                        ui.add(
+                                            egui::DragValue::new(&mut self.manual_payload.cog_z)
+                                                .speed(0.001),
+                                        );
+                                    });
+
+                                    ui.label("Inertia Matrix (kg*m^2):");
+                                    ui.horizontal(|ui| {
+                                        ui.label("Ixx:");
+                                        ui.add(
+                                            egui::DragValue::new(&mut self.manual_payload.ixx)
+                                                .speed(0.001),
+                                        );
+                                        ui.label("Iyy:");
+                                        ui.add(
+                                            egui::DragValue::new(&mut self.manual_payload.iyy)
+                                                .speed(0.001),
+                                        );
+                                        ui.label("Izz:");
+                                        ui.add(
+                                            egui::DragValue::new(&mut self.manual_payload.izz)
+                                                .speed(0.001),
+                                        );
+                                    });
+                                    ui.horizontal(|ui| {
+                                        ui.label("Ixy:");
+                                        ui.add(
+                                            egui::DragValue::new(&mut self.manual_payload.ixy)
+                                                .speed(0.001),
+                                        );
+                                        ui.label("Ixz:");
+                                        ui.add(
+                                            egui::DragValue::new(&mut self.manual_payload.ixz)
+                                                .speed(0.001),
+                                        );
+                                        ui.label("Iyz:");
+                                        ui.add(
+                                            egui::DragValue::new(&mut self.manual_payload.iyz)
+                                                .speed(0.001),
+                                        );
+                                    });
                                 });
                         });
                     });
-
-                    // --- Manual Payload Inputs ---
-                    // Enabled *only if* "Set Manual" is checked
-                    ui.add_enabled_ui(self.set_manual_payload, |ui| {
-                        egui::Frame::default()
-                            .inner_margin(egui::Margin::same(5))
-                            .stroke(egui::Stroke::new(1.0, egui::Color32::DARK_GRAY))
-                            .show(ui, |ui| {
-                                ui.label("Manual Configuration:");
-
-                                ui.horizontal(|ui| {
-                                    ui.label("Mass (kg):");
-                                    ui.add(egui::DragValue::new(&mut self.manual_payload.mass).speed(0.01).range(0.0..=f32::MAX));
-                                });
-
-                                ui.label("Center of Gravity (m):");
-                                ui.horizontal(|ui| {
-                                    ui.label("CoG X:");
-                                    ui.add(egui::DragValue::new(&mut self.manual_payload.cog_x).speed(0.001));
-                                    ui.label("CoG Y:");
-                                    ui.add(egui::DragValue::new(&mut self.manual_payload.cog_y).speed(0.001));
-                                    ui.label("CoG Z:");
-                                    ui.add(egui::DragValue::new(&mut self.manual_payload.cog_z).speed(0.001));
-                                });
-
-                                ui.label("Inertia Matrix (kg*m^2):");
-                                ui.horizontal(|ui| {
-                                    ui.label("Ixx:");
-                                    ui.add(egui::DragValue::new(&mut self.manual_payload.ixx).speed(0.001));
-                                    ui.label("Iyy:");
-                                    ui.add(egui::DragValue::new(&mut self.manual_payload.iyy).speed(0.001));
-                                    ui.label("Izz:");
-                                    ui.add(egui::DragValue::new(&mut self.manual_payload.izz).speed(0.001));
-                                });
-                                ui.horizontal(|ui| {
-                                    ui.label("Ixy:");
-                                    ui.add(egui::DragValue::new(&mut self.manual_payload.ixy).speed(0.001));
-                                    ui.label("Ixz:");
-                                    ui.add(egui::DragValue::new(&mut self.manual_payload.ixz).speed(0.001));
-                                    ui.label("Iyz:");
-                                    ui.add(egui::DragValue::new(&mut self.manual_payload.iyz).speed(0.001));
-                                });
-                            });
-                    });
+                   
                 });
+                 ui.add(egui::Separator::default().vertical());
+                    // ui.allocate_ui(egui::vec2(ui.available_width(), 260.0), |ui| {
+                    ui.vertical(|ui| {
+                        ui.heading("Miscelaneous (Optional)");
+                        ui.checkbox(&mut self.use_execution_time, "Use Execution Time");
+
+                        ui.add_enabled_ui(self.use_execution_time, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label("Execution Time:");
+                                ui.add(
+                                    egui::DragValue::new(&mut self.execution_time_ms)
+                                        .suffix(" ms")
+                                        .speed(10.0),
+                                );
+                            });
+                        });
+                    });
             });
         });
+
+        // --- Vertical Separator ---
+
+        // });
+        // });
 
         ui.separator(); // --- Final Separator ---
 
