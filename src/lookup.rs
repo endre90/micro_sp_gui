@@ -4,6 +4,8 @@ use poll_promise::Promise;
 use serde::Serialize;
 use std::{collections::HashMap, sync::Arc};
 
+// --- Helper Functions (moved from lib.rs) ---
+
 #[derive(Serialize)]
 struct JsonOutputTransform {
     child_frame_id: String,
@@ -32,14 +34,15 @@ async fn lookup_transform(
         Ok(tfs) => Ok(tfs),
         Err(e) => {
             log::error!("GUI Failed to lookup transform with: {e}!");
-            Err("GUI Failed to lookup transform with: {e}!".into())
+            Err(format!("GUI Failed to lookup transform with: {e}"))
         }
     }
 }
 
-pub struct MyApp {
-    handle: tokio::runtime::Handle,
-    connection: Arc<ConnectionManager>,
+// --- Tab-Specific State ---
+
+/// Holds all the state for the Transforms tab
+pub struct TransformsTab {
     get_all_transforms_promise: Option<Promise<HashMap<String, SPTransformStamped>>>,
     transform_keys: Vec<String>,
     parent: Option<String>,
@@ -49,21 +52,10 @@ pub struct MyApp {
     lookup_error: Option<String>,
 }
 
-impl eframe::App for MyApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        ctx.request_repaint();
-        egui::CentralPanel::default().show(ctx, |ui| {
-            self.ui(ui);
-        });
-    }
-}
-
-impl MyApp {
-    pub async fn new(handle: tokio::runtime::Handle) -> Self {
-        let connection = Arc::new(ConnectionManager::new().await);
+impl TransformsTab {
+    /// Create a new `TransformsTab` with default state
+    pub fn new() -> Self {
         Self {
-            handle,
-            connection,
             get_all_transforms_promise: None,
             transform_keys: Vec::new(),
             parent: None,
@@ -74,13 +66,20 @@ impl MyApp {
         }
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui) {
+    /// Draw the UI for the Transforms tab
+    /// All shared state (like handle and connection) is passed in.
+    pub fn ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        handle: &tokio::runtime::Handle,
+        connection: &Arc<ConnectionManager>,
+    ) {
         ui.heading("Transforms Lookup GUI");
         ui.separator();
 
         let is_fetching_list = self.poll_transforms_promise(ui);
         if !is_fetching_list && ui.button("Fetch Transforms").clicked() {
-            self.spawn_transforms_promise();
+            self.spawn_transforms_promise(handle, connection);
         }
 
         ui.separator();
@@ -102,17 +101,24 @@ impl MyApp {
 
         ui.add_space(10.0);
 
-        self.draw_lookup_section(ui);
+        self.draw_lookup_section(ui, handle, connection);
     }
 
-    fn draw_lookup_section(&mut self, ui: &mut egui::Ui) {
+    // --- All helper functions are now methods on `TransformsTab` ---
+
+    fn draw_lookup_section(
+        &mut self,
+        ui: &mut egui::Ui,
+        handle: &tokio::runtime::Handle,
+        connection: &Arc<ConnectionManager>,
+    ) {
         let both_selected = self.parent.is_some() && self.child.is_some();
         let is_loading = self.lookup_promise.is_some();
 
         ui.horizontal(|ui| {
             ui.add_enabled_ui(both_selected && !is_loading, |ui| {
                 if ui.button("Lookup").clicked() {
-                    self.spawn_lookup_promise();
+                    self.spawn_lookup_promise(handle, connection);
                 }
             });
 
@@ -133,18 +139,22 @@ impl MyApp {
             ui.label("Resulting JSON:");
             egui::TextEdit::multiline(json_string)
                 .font(egui::FontId::monospace(12.0))
-                .desired_width(f32::INFINITY) // Use available width
+                .desired_width(f32::INFINITY)
                 .show(ui);
         }
     }
 
-    fn spawn_lookup_promise(&mut self) {
+    fn spawn_lookup_promise(
+        &mut self,
+        handle: &tokio::runtime::Handle,
+        connection: &Arc<ConnectionManager>,
+    ) {
         self.lookup_result_json = None;
         self.lookup_error = None;
 
         if let (Some(parent), Some(child)) = (self.parent.clone(), self.child.clone()) {
-            let handle = self.handle.clone();
-            let con_clone = self.connection.clone();
+            let handle = handle.clone();
+            let con_clone = connection.clone();
             self.lookup_promise = Some(Promise::spawn_thread("lookup_fetcher", move || {
                 handle.block_on(lookup_transform(con_clone, &parent, &child))
             }));
@@ -183,7 +193,7 @@ impl MyApp {
 
         match promise.poll() {
             std::task::Poll::Ready(result) => {
-                self.process_transforms_result(&result);
+                self.process_transforms_result(result);
                 false
             }
             std::task::Poll::Pending => {
@@ -212,15 +222,20 @@ impl MyApp {
         }
     }
 
-    fn spawn_transforms_promise(&mut self) {
-        let handle = self.handle.clone();
-        let con_clone = self.connection.clone();
+    fn spawn_transforms_promise(
+        &mut self,
+        handle: &tokio::runtime::Handle,
+        connection: &Arc<ConnectionManager>,
+    ) {
+        let handle = handle.clone();
+        let con_clone = connection.clone();
         self.get_all_transforms_promise = Some(Promise::spawn_thread("fetcher", move || {
             handle.block_on(get_all_transforms(con_clone))
         }));
     }
 }
 
+// This helper function remains in this module as it's only used by the transforms tab
 fn draw_transform_selector(
     ui: &mut egui::Ui,
     label_text: &str,

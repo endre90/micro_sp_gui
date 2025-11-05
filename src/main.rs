@@ -1,5 +1,7 @@
 use eframe::egui;
-mod transforms_gui;
+mod tabs;
+mod lookup;
+mod another;
 
 #[tokio::main]
 async fn main() -> Result<(), eframe::Error> {
@@ -11,7 +13,7 @@ async fn main() -> Result<(), eframe::Error> {
     };
 
     let handle = tokio::runtime::Handle::current();
-    let my_app = transforms_gui::MyApp::new(handle).await;
+    let my_app = tabs::MyApp::new(handle).await;
 
     eframe::run_native(
         "Transforms Lookup App",
