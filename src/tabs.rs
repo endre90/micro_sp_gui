@@ -10,6 +10,7 @@ use std::sync::Arc;
 #[derive(PartialEq, Eq, Debug)]
 enum AppTab {
     Transforms,
+    RobotTab,
     AnotherTab,
 }
 
@@ -18,6 +19,7 @@ pub struct MyApp {
     connection: Arc<ConnectionManager>,
 
     transforms_tab: crate::lookup::TransformsTab,
+    robot_tab: crate::robot::RobotTab,
     another_tab: crate::another::AnotherTab,
     active_tab: AppTab,
 }
@@ -38,6 +40,7 @@ impl MyApp {
             handle,
             connection,
             transforms_tab: crate::lookup::TransformsTab::new(),
+            robot_tab: crate::robot::RobotTab::new(),
             another_tab: crate::another::AnotherTab::new(),
             active_tab: AppTab::Transforms,
         }
@@ -48,6 +51,7 @@ impl MyApp {
         // Draw the horizontal tab bar
         ui.horizontal(|ui| {
             ui.selectable_value(&mut self.active_tab, AppTab::Transforms, "Transforms");
+            ui.selectable_value(&mut self.active_tab, AppTab::RobotTab, "Robot Controller");
             ui.selectable_value(&mut self.active_tab, AppTab::AnotherTab, "Another Tab");
         });
 
@@ -58,6 +62,10 @@ impl MyApp {
         match self.active_tab {
             AppTab::Transforms => {
                 self.transforms_tab
+                    .ui(ui, &self.handle, &self.connection);
+            }
+            AppTab::RobotTab => {
+                self.robot_tab
                     .ui(ui, &self.handle, &self.connection);
             }
             AppTab::AnotherTab => {

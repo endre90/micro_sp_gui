@@ -2,13 +2,14 @@ use eframe::egui;
 mod tabs;
 mod lookup;
 mod another;
+mod robot;
 
 #[tokio::main]
 async fn main() -> Result<(), eframe::Error> {
     env_logger::init();
 
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([500.0, 400.0]),
+        viewport: egui::ViewportBuilder::default().with_inner_size([500.0, 600.0]),
         ..Default::default()
     };
 
