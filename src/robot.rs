@@ -140,8 +140,6 @@ pub struct RobotTab {
     velocity: f32,
     global_acceleration_scaling: f32,
     global_velocity_scaling: f32,
-    use_execution_time: bool,
-    execution_time_ms: u32,
 
     // --- New Blend/Joint State ---
     use_blend_radius: bool,
@@ -155,6 +153,12 @@ pub struct RobotTab {
     set_manual_payload: bool,
     saved_payload: SavedPayload,
     manual_payload: Payload,
+
+    use_execution_time: bool,
+    execution_time_ms: u32,
+    force_threshold: u32,
+    use_relative_pose: bool,
+    relative_pose: [f32; 6],
 }
 
 impl RobotTab {
@@ -175,8 +179,7 @@ impl RobotTab {
             velocity: 0.1,
             global_acceleration_scaling: 1.0,
             global_velocity_scaling: 1.0,
-            use_execution_time: false,
-            execution_time_ms: 0,
+
             // --- New State ---
             use_blend_radius: false,
             blend_radius: 0.0,
@@ -189,6 +192,12 @@ impl RobotTab {
             set_manual_payload: false,
             saved_payload: SavedPayload::None,
             manual_payload: Payload::default(),
+
+            use_execution_time: false,
+            execution_time_ms: 0,
+            force_threshold: 20,
+            use_relative_pose: false,
+            relative_pose: [0.0; 6],
         }
     }
 
@@ -202,7 +211,7 @@ impl RobotTab {
         // The parent (e.g., in main.rs) should put this inside a ScrollArea
         // if the main window can be smaller than this tab's content.
 
-        ui.heading("Robot Command GUI");
+        ui.heading("Robot Controller");
         ui.separator();
 
         // --- Top Section: Pose/Motion and Command Config ---
@@ -334,7 +343,13 @@ impl RobotTab {
                 // --- Group 3: Blend & Joint Positions (Bottom-Left) ---
                 ui.vertical(|ui| {
                     ui.set_min_width(250.0); // Ensure column has a reasonable width
-                    ui.heading("Joint Positions (Optional)");
+                    ui.horizontal(|ui| {
+                        ui.heading("Joint Positions (Optional)");
+                        ui.label("ℹ").on_hover_text(
+                            "Use joint positions instead of a goal pose.",
+                        );
+                    });
+                    
                     // ui.checkbox(&mut self.use_blend_radius, "Use Blend Radius");
                     // ui.add_enabled_ui(self.use_blend_radius, |ui| {
                     //     ui.horizontal(|ui| {
@@ -503,25 +518,37 @@ impl RobotTab {
                                 });
                         });
                     });
-                   
                 });
-                 ui.add(egui::Separator::default().vertical());
-                    // ui.allocate_ui(egui::vec2(ui.available_width(), 260.0), |ui| {
-                    ui.vertical(|ui| {
-                        ui.heading("Miscelaneous (Optional)");
-                        ui.checkbox(&mut self.use_execution_time, "Use Execution Time");
+                ui.add(egui::Separator::default().vertical());
+                // ui.allocate_ui(egui::vec2(ui.available_width(), 260.0), |ui| {
+                ui.vertical(|ui| {
+                    ui.heading("Miscelaneous (Optional)");
+                    ui.checkbox(&mut self.use_execution_time, "Use Execution Time");
 
-                        ui.add_enabled_ui(self.use_execution_time, |ui| {
-                            ui.horizontal(|ui| {
-                                ui.label("Execution Time:");
-                                ui.add(
-                                    egui::DragValue::new(&mut self.execution_time_ms)
-                                        .suffix(" ms")
-                                        .speed(10.0),
-                                );
-                            });
+                    ui.add_enabled_ui(self.use_execution_time, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("Execution Time:");
+                            ui.add(
+                                egui::DragValue::new(&mut self.execution_time_ms)
+                                    .suffix(" ms")
+                                    .speed(10.0),
+                            );
                         });
                     });
+                    ui.horizontal(|ui| {
+                        ui.label("Force Threshold:");
+                        ui.add(
+                            egui::DragValue::new(&mut self.force_threshold)
+                                .suffix(" N")
+                                .speed(0.1)
+                                .range(0.0..=200.0),
+                        );
+                    });
+                    ui.checkbox(&mut self.use_relative_pose, "Use Relative Pose");
+                    ui.add_enabled_ui(self.use_relative_pose, |ui| {
+                        draw_relative_pose_inputs(ui, &mut self.relative_pose, "relative_pose");
+                    });
+                });
             });
         });
 
@@ -662,6 +689,56 @@ fn draw_joint_inputs(ui: &mut egui::Ui, joints: &mut [f32; 6], id_prefix: &str) 
                 egui::DragValue::new(&mut joints[5])
                     .suffix(" rad")
                     .range(rad_range.clone())
+                    .speed(0.01),
+            );
+            ui.end_row();
+        });
+}
+
+fn draw_relative_pose_inputs(ui: &mut egui::Ui, poses: &mut [f32; 6], id_prefix: &str) {
+    egui::Grid::new(id_prefix)
+        .num_columns(4)
+        .spacing([20.0, 4.0])
+        .striped(true)
+        .show(ui, |ui| {
+            ui.label("x:");
+            ui.add(
+                egui::DragValue::new(&mut poses[0])
+                    .suffix(" m")
+                    .speed(0.001),
+            );
+            ui.label("rx:");
+            ui.add(
+                egui::DragValue::new(&mut poses[3])
+                    .suffix(" m")
+                    .speed(0.01),
+            );
+            ui.end_row();
+
+            ui.label("y:");
+            ui.add(
+                egui::DragValue::new(&mut poses[1])
+                    .suffix(" m")
+                    .speed(0.001),
+            );
+            ui.label("ry:");
+            ui.add(
+                egui::DragValue::new(&mut poses[4])
+                    .suffix(" rad")
+                    .speed(0.01),
+            );
+            ui.end_row();
+
+            ui.label("z:");
+            ui.add(
+                egui::DragValue::new(&mut poses[2])
+                    .suffix(" m")
+                    .speed(0.001),
+            );
+            ui.label("rz:");
+            ui.add(
+                egui::DragValue::new(&mut poses[5])
+                    .suffix(" rad")
                     .speed(0.01),
             );
             ui.end_row();

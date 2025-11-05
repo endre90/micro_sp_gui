@@ -1,15 +1,15 @@
 use eframe::egui;
-mod tabs;
-mod lookup;
 mod another;
+mod lookup;
 mod robot;
+mod tabs;
 
 #[tokio::main]
 async fn main() -> Result<(), eframe::Error> {
     env_logger::init();
 
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([1000.0, 800.0]),
+        viewport: egui::ViewportBuilder::default().with_inner_size([1300.0, 1000.0]),
         ..Default::default()
     };
 
@@ -17,8 +17,11 @@ async fn main() -> Result<(), eframe::Error> {
     let my_app = tabs::MyApp::new(handle).await;
 
     eframe::run_native(
-        "Transforms Lookup App",
+        "micro_sp controller",
         options,
-        Box::new(|_cc| Ok(Box::new(my_app))),
+        Box::new(|cc| {
+            cc.egui_ctx.set_pixels_per_point(1.5);
+            Ok(Box::new(my_app))
+        }),
     )
 }
