@@ -1,7 +1,8 @@
 use eframe::egui;
-use micro_sp::{ConnectionManager, SPTransformStamped, TransformsManager};
+use micro_sp::*;
+use ordered_float::OrderedFloat;
 use poll_promise::Promise;
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, fmt, sync::Arc};
 
 #[derive(Debug, Clone, PartialEq)]
 enum SavedPayload {
@@ -43,18 +44,18 @@ impl SavedPayload {
 #[derive(Debug, Clone)]
 pub struct Payload {
     /// Payload Mass in kilograms.
-    pub mass: f32,
+    pub mass: f64,
     /// Payload Center of Gravity offsets (in meters) from the tool mount.
-    pub cog_x: f32,
-    pub cog_y: f32,
-    pub cog_z: f32,
+    pub cog_x: f64,
+    pub cog_y: f64,
+    pub cog_z: f64,
     /// Payload Inertia Matrix (in kg*m^2) with origin at the CoG and axes aligned with the tool flange axes.
-    pub ixx: f32,
-    pub iyy: f32,
-    pub izz: f32,
-    pub ixy: f32,
-    pub ixz: f32,
-    pub iyz: f32,
+    pub ixx: f64,
+    pub iyy: f64,
+    pub izz: f64,
+    pub ixy: f64,
+    pub ixz: f64,
+    pub iyz: f64,
 }
 
 impl Default for Payload {
@@ -74,6 +75,25 @@ impl Default for Payload {
     }
 }
 
+impl fmt::Display for Payload {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{},[{},{},{}],[{},{},{},{},{},{}]",
+            self.mass,
+            self.cog_x,
+            self.cog_y,
+            self.cog_z,
+            self.ixx,
+            self.iyy,
+            self.izz,
+            self.ixy,
+            self.ixz,
+            self.iyz
+        )
+    }
+}
+
 async fn get_all_transforms(con: Arc<ConnectionManager>) -> HashMap<String, SPTransformStamped> {
     let mut connection = con.get_connection().await;
     match TransformsManager::get_all_transforms(&mut connection).await {
@@ -83,6 +103,11 @@ async fn get_all_transforms(con: Arc<ConnectionManager>) -> HashMap<String, SPTr
             HashMap::new()
         }
     }
+}
+
+async fn send_robot_command(state: &State, con: Arc<ConnectionManager>) -> () {
+    let mut connection = con.get_connection().await;
+    StateManager::set_state(&mut connection, &state).await;
 }
 
 // --- RobotTab Specific ---
@@ -127,8 +152,9 @@ pub struct RobotTab {
     // --- Transform State ---
     robot_id_input: String,
     get_all_transforms_promise: Option<Promise<HashMap<String, SPTransformStamped>>>,
+    robot_control_promise: Option<Promise<()>>,
     transform_keys: Vec<String>,
-    selected_pose: Option<String>,
+    selected_goal_feature_id: Option<String>,
     tcp_keys: Vec<String>,
     selected_tcp: Option<String>,
     selected_faceplate: Option<String>,
@@ -137,19 +163,19 @@ pub struct RobotTab {
 
     // --- Command State ---
     command_type: CommandType,
-    acceleration: f32,
-    velocity: f32,
-    global_acceleration_scaling: f32,
-    global_velocity_scaling: f32,
+    acceleration: f64,
+    velocity: f64,
+    global_acceleration_scaling: f64,
+    global_velocity_scaling: f64,
 
     // --- New Blend/Joint State ---
     use_blend_radius: bool,
-    blend_radius: f32,
+    blend_radius: f64,
     use_joint_positions: bool,
     set_manual_joint_positions: bool,
-    joint_positions: [f32; 6],
+    joint_positions: [f64; 6],
     use_preferred_joint_config: bool,
-    preferred_joint_config: [f32; 6],
+    preferred_joint_config: [f64; 6],
     set_manual_joint_config: bool,
 
     use_payload: bool,
@@ -158,10 +184,10 @@ pub struct RobotTab {
     manual_payload: Payload,
 
     use_execution_time: bool,
-    execution_time_ms: u32,
-    force_threshold: u32,
+    execution_time_s: f64,
+    force_threshold: f64,
     use_relative_pose: bool,
-    relative_pose: [f32; 6],
+    relative_pose: [f64; 6],
 }
 
 impl RobotTab {
@@ -170,8 +196,9 @@ impl RobotTab {
             // --- Transform State ---
             robot_id_input: "r1".to_string(),
             get_all_transforms_promise: None,
+            robot_control_promise: None,
             transform_keys: Vec::new(),
-            selected_pose: None,
+            selected_goal_feature_id: None,
             tcp_keys: Vec::new(),
             selected_tcp: None,
             selected_faceplate: Some("tool0".to_string()),
@@ -200,8 +227,8 @@ impl RobotTab {
             manual_payload: Payload::default(),
 
             use_execution_time: false,
-            execution_time_ms: 0,
-            force_threshold: 20,
+            execution_time_s: 0.0,
+            force_threshold: 20.0,
             use_relative_pose: false,
             relative_pose: [0.0; 6],
         }
@@ -231,7 +258,14 @@ impl RobotTab {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 // 1. The Button (will be furthest right)
                 ui.add_enabled(true, egui::Button::new("Stop"));
-                ui.add_enabled(true, egui::Button::new("Send Command"));
+
+                // The `.clicked()` method returns true on the frame the button is pressed
+                if ui
+                    .add_enabled(true, egui::Button::new("Send Command"))
+                    .clicked()
+                {
+                    self.spawn_robot_control_promise(handle, connection)
+                }
 
                 // 2. The Text Box (will be to the left of the button)
                 // We make it "small" by setting a desired_width.
@@ -245,7 +279,7 @@ impl RobotTab {
         ui.separator();
 
         // --- Top Section: Pose/Motion and Command Config ---
-        // Allocate a fixed height for this section
+        // Allocate a fixed height for this sectionc
         ui.allocate_ui(egui::vec2(ui.available_width(), 130.0), |ui| {
             ui.horizontal_top(|ui| {
                 // --- Group 1: Pose & Motion (Left Column) ---
@@ -266,7 +300,7 @@ impl RobotTab {
                         ui,
                         "Goal Feature ID (Where to go):",
                         "pose_select",
-                        &mut self.selected_pose,
+                        &mut self.selected_goal_feature_id,
                         &self.transform_keys,
                     );
                     draw_pose_selector(
@@ -321,11 +355,21 @@ impl RobotTab {
                             });
                     });
 
+                    let accel_vel_suffix = match self.command_type {
+                        CommandType::MoveL => " m/s²",
+                        CommandType::MoveJ => " rad/s²",
+                        CommandType::SafeMoveL => " m/s²",
+                        CommandType::SafeMoveJ => " rad/s²",
+                        CommandType::PickVacuum => " m/s²",
+                        CommandType::PlaceVacuum => " m/s²",
+                    };
+
                     ui.horizontal(|ui| {
                         ui.label("Acceleration:");
+
                         ui.add(
                             egui::DragValue::new(&mut self.acceleration)
-                                .suffix(" m/s²")
+                                .suffix(accel_vel_suffix) // Use the dynamically set suffix
                                 .speed(0.01)
                                 .range(0.0..=1.0),
                         );
@@ -335,7 +379,7 @@ impl RobotTab {
                         ui.label("Velocity:");
                         ui.add(
                             egui::DragValue::new(&mut self.velocity)
-                                .suffix(" m/s")
+                                .suffix(accel_vel_suffix)
                                 .speed(0.01)
                                 .range(0.0..=1.0),
                         );
@@ -540,7 +584,7 @@ impl RobotTab {
                                         ui.add(
                                             egui::DragValue::new(&mut self.manual_payload.mass)
                                                 .speed(0.01)
-                                                .range(0.0..=f32::MAX),
+                                                .range(0.0..=f64::MAX),
                                         );
                                     });
 
@@ -612,7 +656,7 @@ impl RobotTab {
                         ui.horizontal(|ui| {
                             ui.label("Execution Time:");
                             ui.add(
-                                egui::DragValue::new(&mut self.execution_time_ms)
+                                egui::DragValue::new(&mut self.execution_time_s)
                                     .suffix(" ms")
                                     .speed(10.0),
                             );
@@ -661,9 +705,9 @@ impl RobotTab {
         keys.sort_unstable();
         self.transform_keys = keys;
 
-        if let Some(pose) = &self.selected_pose {
+        if let Some(pose) = &self.selected_goal_feature_id {
             if !self.transform_keys.contains(pose) {
-                self.selected_pose = None;
+                self.selected_goal_feature_id = None;
             }
         }
     }
@@ -678,6 +722,24 @@ impl RobotTab {
         self.get_all_transforms_promise = Some(Promise::spawn_thread("fetcher", move || {
             handle.block_on(get_all_transforms(con_clone))
         }));
+    }
+
+    fn spawn_robot_control_promise(
+        &mut self,
+        handle: &tokio::runtime::Handle,
+        connection: &Arc<ConnectionManager>,
+    ) {
+        let handle = handle.clone();
+        let con_clone = connection.clone();
+        match robot_command_tab_to_state(&self) {
+            Ok(state) => {
+                self.robot_control_promise =
+                    Some(Promise::spawn_thread("robot_control", move || {
+                        handle.block_on(send_robot_command(&state, con_clone))
+                    }));
+            }
+            Err(_) => (),
+        }
     }
 }
 
@@ -707,7 +769,7 @@ fn draw_pose_selector(
 }
 
 /// Helper to draw 6 joint input fields in a grid
-fn draw_joint_inputs(ui: &mut egui::Ui, joints: &mut [f32; 6], id_prefix: &str) {
+fn draw_joint_inputs(ui: &mut egui::Ui, joints: &mut [f64; 6], id_prefix: &str) {
     let rad_range = -6.28..=6.28;
 
     egui::Grid::new(id_prefix)
@@ -765,7 +827,7 @@ fn draw_joint_inputs(ui: &mut egui::Ui, joints: &mut [f32; 6], id_prefix: &str) 
         });
 }
 
-fn draw_relative_pose_inputs(ui: &mut egui::Ui, poses: &mut [f32; 6], id_prefix: &str) {
+fn draw_relative_pose_inputs(ui: &mut egui::Ui, poses: &mut [f64; 6], id_prefix: &str) {
     egui::Grid::new(id_prefix)
         .num_columns(4)
         .spacing([20.0, 4.0])
@@ -813,4 +875,204 @@ fn draw_relative_pose_inputs(ui: &mut egui::Ui, poses: &mut [f32; 6], id_prefix:
             );
             ui.end_row();
         });
+}
+
+// Should have one for dashboard as well
+pub fn robot_command_tab_to_state(tab: &RobotTab) -> Result<State, String> {
+    println!("trigerred");
+    let robot_name = &tab.robot_id_input;
+    let state = State::new();
+
+    let request_trigger = bv!(&&format!("{}_request_trigger", robot_name));
+    // let dashboard_request_trigger = bv!(&&format!("{}_dashboard_request_trigger", robot_name));
+
+    let state = state.add(assign!(request_trigger, true.to_spvalue()));
+    // let state = state.add(assign!(dashboard_request_trigger, false.to_spvalue()));
+
+    let command_type = v!(&&format!("{}_command_type", robot_name));
+    let accelleration = fv!(&&format!("{}_accelleration", robot_name));
+    let velocity = fv!(&&format!("{}_velocity", robot_name));
+
+    // Is this Dashboard? We should also have protective stop / violation release, pause and continue, get into remote control, set max force (safety)
+    // let global_acceleration_scaling = fv!(&&format!("{}_global_acceleration_scaling", robot_name));
+    // let global_velocity_scaling = fv!(&&format!("{}_global_velocity_scaling", robot_name));
+    let use_execution_time = bv!(&&format!("{}_use_execution_time", robot_name));
+    let execution_time = fv!(&&format!("{}_execution_time", robot_name));
+    let use_blend_radius = bv!(&&format!("{}_use_blend_radius", robot_name));
+    let blend_radius = fv!(&&format!("{}_blend_radius", robot_name));
+    let use_joint_positions = bv!(&&format!("{}_use_joint_positions", robot_name));
+    let joint_positions = av!(&&format!("{}_joint_positions", robot_name));
+
+    // Input could be put in jpint positions eventually
+    // let joint_states = av!(&&format!("{}_joint_states", robot_name));
+    let use_preferred_joint_config = bv!(&&format!("{}_use_preferred_joint_config", robot_name));
+    let preferred_joint_config = av!(&&format!("{}_preferred_joint_config", robot_name));
+    let use_payload = bv!(&&format!("{}_use_payload", robot_name));
+    let payload = v!(&&format!("{}_payload", robot_name));
+    let baseframe_id = v!(&&format!("{}_baseframe_id", robot_name));
+    let faceplate_id = v!(&&format!("{}_faceplate_id", robot_name));
+    let goal_feature_id = v!(&&format!("{}_goal_feature_id", robot_name));
+    let tcp_id = v!(&&format!("{}_tcp_id", robot_name));
+    let root_frame_id = v!(&&format!("{}_root_frame_id", robot_name));
+    // let cancel_current_goal = bv!(&&format!("{}_cancel_current_goal", robot_name));
+    let force_threshold = fv!(&&format!("{}_force_threshold", robot_name));
+    // let force_feedback = fv!(&&format!("{}_force_feedback", robot_name));
+    // let estimated_position = v!(&&format!("{}_estimated_position", robot_name));
+    let use_relative_pose = bv!(&&format!("{}_use_relative_pose", robot_name));
+    let relative_pose = av!(&&format!("{}_relative_pose", robot_name));
+
+    let state = state.add(assign!(
+        command_type,
+        SPValue::String(StringOrUnknown::String(tab.command_type.to_string()))
+    ));
+
+    let state = state.add(assign!(
+        accelleration,
+        SPValue::Float64(FloatOrUnknown::Float64(OrderedFloat(tab.acceleration)))
+    ));
+    let state = state.add(assign!(
+        velocity,
+        SPValue::Float64(FloatOrUnknown::Float64(OrderedFloat(tab.velocity)))
+    ));
+
+    // Is this dashboard?
+    // let state = state.add(assign!(
+    //     global_acceleration_scaling,
+    //     SPValue::Float64(FloatOrUnknown::Float64(OrderedFloat(tab.global_acceleration_scaling)))
+    // ));
+    // let state = state.add(assign!(
+    //     global_velocity_scaling,
+    //     SPValue::Float64(FloatOrUnknown::UNKNOWN)
+    // ));
+    let state = state.add(assign!(
+        use_execution_time,
+        SPValue::Bool(BoolOrUnknown::Bool(tab.use_execution_time))
+    ));
+    let state = state.add(assign!(
+        execution_time,
+        SPValue::Float64(FloatOrUnknown::Float64(OrderedFloat(tab.execution_time_s)))
+    ));
+    let state = state.add(assign!(
+        use_blend_radius,
+        SPValue::Bool(BoolOrUnknown::Bool(tab.use_blend_radius))
+    ));
+    let state = state.add(assign!(
+        blend_radius,
+        SPValue::Float64(FloatOrUnknown::Float64(OrderedFloat(tab.blend_radius)))
+    ));
+    let state = state.add(assign!(
+        use_joint_positions,
+        SPValue::Bool(BoolOrUnknown::Bool(tab.use_joint_positions))
+    ));
+    let state = state.add(assign!(
+        joint_positions,
+        SPValue::Array(ArrayOrUnknown::Array(
+            tab.joint_positions.iter().map(|x| x.to_spvalue()).collect()
+        ))
+    ));
+
+    // Could be good to read this as input and put it in the joint positions eventually
+    // let state = state.add(assign!(
+    //     joint_states,
+    //     SPValue::Array(ArrayOrUnknown::UNKNOWN)
+    // ));
+    let state = state.add(assign!(
+        use_preferred_joint_config,
+        SPValue::Bool(BoolOrUnknown::Bool(tab.use_preferred_joint_config))
+    ));
+    let state = state.add(assign!(
+        preferred_joint_config,
+        SPValue::Array(ArrayOrUnknown::Array(
+            tab.preferred_joint_config
+                .iter()
+                .map(|x| x.to_spvalue())
+                .collect()
+        ))
+    ));
+    let state = state.add(assign!(
+        use_payload,
+        SPValue::Bool(BoolOrUnknown::Bool(tab.use_payload))
+    ));
+    let state = state.add(assign!(
+        payload,
+        SPValue::String(StringOrUnknown::String(tab.saved_payload.to_string()))
+    ));
+    let state = match &tab.selected_baseframe {
+        Some(baseframe) => state.add(assign!(
+            baseframe_id,
+            SPValue::String(StringOrUnknown::String(baseframe.to_owned()))
+        )),
+        None => {
+            log::error!("Baseframe not selected");
+            return Err(format!("Baseframe not selected"));
+        }
+    };
+    let state = match &tab.selected_faceplate {
+        Some(faceplate) => state.add(assign!(
+            faceplate_id,
+            SPValue::String(StringOrUnknown::String(faceplate.to_owned()))
+        )),
+        None => {
+            log::error!("Faceplate not selected");
+            return Err(format!("Faceplate not selected"));
+        }
+    };
+    let state = match &tab.selected_goal_feature_id {
+        Some(goal_feature) => state.add(assign!(
+            goal_feature_id,
+            SPValue::String(StringOrUnknown::String(goal_feature.to_owned()))
+        )),
+        None => {
+            log::error!("Goal feature not selected");
+            return Err(format!("Goal feature not selected"));
+        }
+    };
+    let state = match &tab.selected_tcp {
+        Some(tcp) => state.add(assign!(
+            tcp_id,
+            SPValue::String(StringOrUnknown::String(tcp.to_owned()))
+        )),
+        None => {
+            log::error!("Tcp not selected");
+            return Err(format!("Tcp not selected"));
+        }
+    };
+
+    let state = state.add(assign!(
+        root_frame_id,
+        SPValue::String(StringOrUnknown::String("world".to_string()))
+    ));
+
+    // Add later, connect to the Stop button. This is the action client and the stop is the dachboard
+    // let state = state.add(assign!(
+    //     cancel_current_goal,
+    //     SPValue::Bool(BoolOrUnknown::UNKNOWN)
+    // ));
+    // let state = state.add(assign!(
+    //     estimated_position,
+    //     SPValue::String(StringOrUnknown::UNKNOWN)
+    // ));
+
+    let state = state.add(assign!(
+        force_threshold,
+        SPValue::Float64(FloatOrUnknown::Float64(OrderedFloat(tab.force_threshold)))
+    ));
+
+    // Add later as input to see what's happening
+    // let state = state.add(assign!(
+    //     force_feedback,
+    //     SPValue::Float64(FloatOrUnknown::UNKNOWN)
+    // ));
+    let state = state.add(assign!(
+        use_relative_pose,
+        SPValue::Bool(BoolOrUnknown::Bool(tab.use_relative_pose))
+    ));
+    let state = state.add(assign!(
+        relative_pose,
+        SPValue::Array(ArrayOrUnknown::Array(
+            tab.relative_pose.iter().map(|x| x.to_spvalue()).collect()
+        ))
+    ));
+
+    Ok(state)
 }
