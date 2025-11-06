@@ -187,7 +187,7 @@ pub struct RobotTab {
     execution_time_s: f64,
     force_threshold: f64,
     use_relative_pose: bool,
-    relative_pose: [f64; 6],
+    relative_pose: [f64; 6]
 }
 
 impl RobotTab {
@@ -230,7 +230,7 @@ impl RobotTab {
             execution_time_s: 0.0,
             force_threshold: 20.0,
             use_relative_pose: false,
-            relative_pose: [0.0; 6],
+            relative_pose: [0.0; 6]
         }
     }
 
@@ -423,18 +423,7 @@ impl RobotTab {
                             .on_hover_text("Use joint positions instead of a goal pose.");
                     });
 
-                    // ui.checkbox(&mut self.use_blend_radius, "Use Blend Radius");
-                    // ui.add_enabled_ui(self.use_blend_radius, |ui| {
-                    //     ui.horizontal(|ui| {
-                    //         ui.label("Blend Radius:");
-                    //         ui.add(
-                    //             egui::DragValue::new(&mut self.blend_radius)
-                    //                 .suffix(" m")
-                    //                 .speed(0.001)
-                    //                 .range(0.0..=0.5), // Example range
-                    //         );
-                    //     });
-                    // });
+
 
                     // ui.separator();
 
@@ -659,6 +648,18 @@ impl RobotTab {
                                 egui::DragValue::new(&mut self.execution_time_s)
                                     .suffix(" ms")
                                     .speed(10.0),
+                            );
+                        });
+                    });
+                    ui.checkbox(&mut self.use_blend_radius, "Use Blend Radius");
+                    ui.add_enabled_ui(self.use_blend_radius, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("Blend Radius:");
+                            ui.add(
+                                egui::DragValue::new(&mut self.blend_radius)
+                                    .suffix(" m")
+                                    .speed(0.001)
+                                    .range(0.0..=0.5), // Example range
                             );
                         });
                     });

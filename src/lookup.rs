@@ -39,7 +39,7 @@ async fn lookup_transform(
     }
 }
 
-pub struct TransformsTab {
+pub struct LookupTab {
     get_all_transforms_promise: Option<Promise<HashMap<String, SPTransformStamped>>>,
     transform_keys: Vec<String>,
     parent: Option<String>,
@@ -49,7 +49,7 @@ pub struct TransformsTab {
     lookup_error: Option<String>,
 }
 
-impl TransformsTab {
+impl LookupTab {
     pub fn new() -> Self {
         Self {
             get_all_transforms_promise: None,

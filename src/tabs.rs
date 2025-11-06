@@ -9,16 +9,17 @@ use std::sync::Arc;
 
 #[derive(PartialEq, Eq, Debug)]
 enum AppTab {
-    Transforms,
     RobotTab,
+    Transforms,
+    Lookup,
     AnotherTab,
 }
 
 pub struct MyApp {
     handle: tokio::runtime::Handle,
     connection: Arc<ConnectionManager>,
-
-    transforms_tab: crate::lookup::TransformsTab,
+    transforms_tab: crate::transforms::TransformsTab,
+    lookup_tab: crate::lookup::LookupTab,
     robot_tab: crate::robot::RobotTab,
     another_tab: crate::another::AnotherTab,
     active_tab: AppTab,
@@ -39,10 +40,11 @@ impl MyApp {
         Self {
             handle,
             connection,
-            transforms_tab: crate::lookup::TransformsTab::new(),
+            transforms_tab: crate::transforms::TransformsTab::new(),
+            lookup_tab: crate::lookup::LookupTab::new(),
             robot_tab: crate::robot::RobotTab::new(),
             another_tab: crate::another::AnotherTab::new(),
-            active_tab: AppTab::Transforms,
+            active_tab: AppTab::RobotTab,
         }
     }
 
@@ -50,9 +52,14 @@ impl MyApp {
     fn ui(&mut self, ui: &mut egui::Ui) {
         // Draw the horizontal tab bar
         ui.horizontal(|ui| {
-            ui.selectable_value(&mut self.active_tab, AppTab::Transforms, "Transforms");
+            ui.selectable_value(
+                &mut self.active_tab,
+                AppTab::Transforms,
+                "Transforms Controller",
+            );
+            ui.selectable_value(&mut self.active_tab, AppTab::Lookup, "Lookup");
             ui.selectable_value(&mut self.active_tab, AppTab::RobotTab, "Robot Controller");
-            ui.selectable_value(&mut self.active_tab, AppTab::AnotherTab, "Another Tab");
+            ui.selectable_value(&mut self.active_tab, AppTab::AnotherTab, "Order Handler");
         });
 
         ui.separator();
@@ -60,14 +67,16 @@ impl MyApp {
         // Match on the active tab and call the `ui` method for that specific tab,
         // passing in any shared state it needs (like the handle and connection).
         match self.active_tab {
-            AppTab::Transforms => {
-                self.transforms_tab
-                    .ui(ui, &self.handle, &self.connection);
-            }
             AppTab::RobotTab => {
-                self.robot_tab
-                    .ui(ui, &self.handle, &self.connection);
+                self.robot_tab.ui(ui, &self.handle, &self.connection);
             }
+            AppTab::Transforms => {
+                self.transforms_tab.ui(ui);
+            }
+            AppTab::Lookup => {
+                self.lookup_tab.ui(ui, &self.handle, &self.connection);
+            }
+
             AppTab::AnotherTab => {
                 self.another_tab.ui(ui);
             }
