@@ -9,7 +9,7 @@ async fn main() -> Result<(), eframe::Error> {
     env_logger::init();
 
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([1300.0, 1000.0]),
+        viewport: egui::ViewportBuilder::default().with_inner_size([750.0, 750.0]),
         ..Default::default()
     };
 
@@ -20,7 +20,7 @@ async fn main() -> Result<(), eframe::Error> {
         "micro_sp controller",
         options,
         Box::new(|cc| {
-            cc.egui_ctx.set_pixels_per_point(1.5);
+            cc.egui_ctx.set_pixels_per_point(1.25);
             Ok(Box::new(my_app))
         }),
     )

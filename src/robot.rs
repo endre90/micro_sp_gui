@@ -125,6 +125,7 @@ impl CommandType {
 
 pub struct RobotTab {
     // --- Transform State ---
+    robot_id_input: String,
     get_all_transforms_promise: Option<Promise<HashMap<String, SPTransformStamped>>>,
     transform_keys: Vec<String>,
     selected_pose: Option<String>,
@@ -132,7 +133,7 @@ pub struct RobotTab {
     selected_tcp: Option<String>,
     selected_faceplate: Option<String>,
     selected_baseframe: Option<String>,
-    selected_root: Option<String>,
+    // selected_root: Option<String>,
 
     // --- Command State ---
     command_type: CommandType,
@@ -145,9 +146,11 @@ pub struct RobotTab {
     use_blend_radius: bool,
     blend_radius: f32,
     use_joint_positions: bool,
+    set_manual_joint_positions: bool,
     joint_positions: [f32; 6],
     use_preferred_joint_config: bool,
     preferred_joint_config: [f32; 6],
+    set_manual_joint_config: bool,
 
     use_payload: bool,
     set_manual_payload: bool,
@@ -165,6 +168,7 @@ impl RobotTab {
     pub fn new() -> Self {
         Self {
             // --- Transform State ---
+            robot_id_input: "r1".to_string(),
             get_all_transforms_promise: None,
             transform_keys: Vec::new(),
             selected_pose: None,
@@ -172,7 +176,7 @@ impl RobotTab {
             selected_tcp: None,
             selected_faceplate: Some("tool0".to_string()),
             selected_baseframe: Some("base_link".to_string()),
-            selected_root: Some("world".to_string()),
+            // selected_root: Some("world".to_string()),
             // --- Command State ---
             command_type: CommandType::MoveL,
             acceleration: 0.1,
@@ -184,9 +188,11 @@ impl RobotTab {
             use_blend_radius: false,
             blend_radius: 0.0,
             use_joint_positions: false,
+            set_manual_joint_positions: false,
             joint_positions: [0.0; 6],
             use_preferred_joint_config: false,
             preferred_joint_config: [0.0; 6],
+            set_manual_joint_config: false,
 
             use_payload: false,
             set_manual_payload: false,
@@ -211,12 +217,36 @@ impl RobotTab {
         // The parent (e.g., in main.rs) should put this inside a ScrollArea
         // if the main window can be smaller than this tab's content.
 
-        ui.heading("Robot Controller");
+        // ui.horizontal(|ui| {
+        //     ui.heading("Robot Controller");
+        //     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        //         ui.add_enabled(true, egui::Button::new("Send Command"));
+        //     });
+        // });
+        // Add all right-aligned items here, in reverse order
+        ui.horizontal(|ui| {
+            ui.heading("Robot Controller"); // This stays on the left
+
+            // Add all right-aligned items here, in reverse order
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                // 1. The Button (will be furthest right)
+                ui.add_enabled(true, egui::Button::new("Stop"));
+                ui.add_enabled(true, egui::Button::new("Send Command"));
+
+                // 2. The Text Box (will be to the left of the button)
+                // We make it "small" by setting a desired_width.
+                let text_box =
+                    egui::TextEdit::singleline(&mut self.robot_id_input).desired_width(50.0); // Adjust width as needed
+                ui.add(text_box);
+                ui.label("Robot ID:");
+                // 3. The Label (will be to the left of the text box)
+            });
+        });
         ui.separator();
 
         // --- Top Section: Pose/Motion and Command Config ---
         // Allocate a fixed height for this section
-        ui.allocate_ui(egui::vec2(ui.available_width(), 160.0), |ui| {
+        ui.allocate_ui(egui::vec2(ui.available_width(), 130.0), |ui| {
             ui.horizontal_top(|ui| {
                 // --- Group 1: Pose & Motion (Left Column) ---
                 ui.vertical(|ui| {
@@ -260,13 +290,13 @@ impl RobotTab {
                         &mut self.selected_baseframe,
                         &self.transform_keys,
                     );
-                    draw_pose_selector(
-                        ui,
-                        "Root ID (Max IK root):",
-                        "root_select",
-                        &mut self.selected_root,
-                        &self.transform_keys,
-                    );
+                    // draw_pose_selector(
+                    //     ui,
+                    //     "Root ID (Max IK root):",
+                    //     "root_select",
+                    //     &mut self.selected_root,
+                    //     &self.transform_keys,
+                    // );
                 });
 
                 // --- Vertical Separator ---
@@ -345,11 +375,10 @@ impl RobotTab {
                     ui.set_min_width(250.0); // Ensure column has a reasonable width
                     ui.horizontal(|ui| {
                         ui.heading("Joint Positions (Optional)");
-                        ui.label("ℹ").on_hover_text(
-                            "Use joint positions instead of a goal pose.",
-                        );
+                        ui.label("ℹ")
+                            .on_hover_text("Use joint positions instead of a goal pose.");
                     });
-                    
+
                     // ui.checkbox(&mut self.use_blend_radius, "Use Blend Radius");
                     // ui.add_enabled_ui(self.use_blend_radius, |ui| {
                     //     ui.horizontal(|ui| {
@@ -366,8 +395,36 @@ impl RobotTab {
                     // ui.separator();
 
                     ui.checkbox(&mut self.use_joint_positions, "Use Joint Positions");
+
+                    // Everything in this section is disabled if `use_payload` is false
                     ui.add_enabled_ui(self.use_joint_positions, |ui| {
-                        draw_joint_inputs(ui, &mut self.joint_positions, "joint_pos");
+                        // --- Dropdown for saved payloads ---
+                        // Disabled if "Set Manual" is checked
+                        ui.add_enabled_ui(!self.set_manual_joint_positions, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label("Saved Joint Positions:");
+                                egui::ComboBox::from_id_salt("saved_joint_positions_select")
+                                    .selected_text(self.saved_payload.to_string())
+                                    .show_ui(ui, |ui| {
+                                        for variant in SavedPayload::variants() {
+                                            ui.selectable_value(
+                                                &mut self.saved_payload,
+                                                variant.clone(),
+                                                variant.to_string(),
+                                            );
+                                        }
+                                    });
+                            });
+                        });
+
+                        ui.checkbox(
+                            &mut self.set_manual_joint_positions,
+                            "Set Manual Joint Positions",
+                        );
+
+                        ui.add_enabled_ui(self.set_manual_joint_positions, |ui| {
+                            draw_joint_inputs(ui, &mut self.joint_positions, "joint_pos");
+                        });
                     });
 
                     // ui.separator();
@@ -402,7 +459,33 @@ impl RobotTab {
                         "Use Preferred Joint Config",
                     );
                     ui.add_enabled_ui(self.use_preferred_joint_config, |ui| {
-                        draw_joint_inputs(ui, &mut self.preferred_joint_config, "joint_config");
+                        // --- Dropdown for saved payloads ---
+                        // Disabled if "Set Manual" is checked
+                        ui.add_enabled_ui(!self.set_manual_joint_config, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label("Saved Joint Configurations:");
+                                egui::ComboBox::from_id_salt("saved_joint_configuration_select")
+                                    .selected_text(self.saved_payload.to_string())
+                                    .show_ui(ui, |ui| {
+                                        for variant in SavedPayload::variants() {
+                                            ui.selectable_value(
+                                                &mut self.saved_payload,
+                                                variant.clone(),
+                                                variant.to_string(),
+                                            );
+                                        }
+                                    });
+                            });
+                        });
+
+                        ui.checkbox(
+                            &mut self.set_manual_joint_config,
+                            "Set Manual Preferred Joint Config",
+                        );
+
+                        ui.add_enabled_ui(self.set_manual_joint_config, |ui| {
+                            draw_joint_inputs(ui, &mut self.preferred_joint_config, "joint_config");
+                        });
                     });
                 });
             });
@@ -412,7 +495,7 @@ impl RobotTab {
 
         // --- Bottom Section: Payload ---
         // Allocate a static height for this section
-        ui.allocate_ui(egui::vec2(ui.available_width(), 260.0), |ui| {
+        ui.allocate_ui(egui::vec2(ui.available_width(), 200.0), |ui| {
             ui.horizontal_top(|ui| {
                 ui.vertical(|ui| {
                     ui.heading("Payload (Optional)");
@@ -420,8 +503,6 @@ impl RobotTab {
 
                     // Everything in this section is disabled if `use_payload` is false
                     ui.add_enabled_ui(self.use_payload, |ui| {
-                        ui.checkbox(&mut self.set_manual_payload, "Set Manual Payload");
-
                         // --- Dropdown for saved payloads ---
                         // Disabled if "Set Manual" is checked
                         ui.add_enabled_ui(!self.set_manual_payload, |ui| {
@@ -440,6 +521,8 @@ impl RobotTab {
                                     });
                             });
                         });
+
+                        ui.checkbox(&mut self.set_manual_payload, "Set Manual Payload");
 
                         // ui.separator();
 
@@ -550,19 +633,6 @@ impl RobotTab {
                     });
                 });
             });
-        });
-
-        // --- Vertical Separator ---
-
-        // });
-        // });
-
-        ui.separator(); // --- Final Separator ---
-
-        // --- Group 5: Send Command Button ---
-        ui.add_space(10.0);
-        ui.vertical_centered(|ui| {
-            ui.add_enabled(false, egui::Button::new("Send Command"));
         });
     }
 
@@ -710,7 +780,7 @@ fn draw_relative_pose_inputs(ui: &mut egui::Ui, poses: &mut [f32; 6], id_prefix:
             ui.label("rx:");
             ui.add(
                 egui::DragValue::new(&mut poses[3])
-                    .suffix(" m")
+                    .suffix(" rad")
                     .speed(0.01),
             );
             ui.end_row();
