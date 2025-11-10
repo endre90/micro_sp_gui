@@ -16,6 +16,7 @@ struct PreferredJointConfiguration(HashMap<String, f64>);
 struct Metadata {
     tcp_id: String,
     preferred_joint_configuration: PreferredJointConfiguration,
+    // preferred_joint_configuration: Vec<(String, f64)>,
     enable_transform: bool,
     active_transform: bool,
     gantry: f64,
@@ -37,6 +38,15 @@ fn vec_to_joint_map(joints: Vec<f64>) -> PreferredJointConfiguration {
         .collect::<HashMap<String, f64>>();
     PreferredJointConfiguration(map)
 }
+
+// fn vec_to_joint_vec(joints: Vec<f64>) -> Vec<(String, f64)> {
+//     let map = joints
+//         .into_iter()
+//         .enumerate()
+//         .map(|(i, val)| (format!("j{}", i), val))
+//         .collect::<Vec<(String, f64)>>();
+//     map
+// }
 
 struct LookupData {
     transform: SPTransformStamped,
@@ -322,41 +332,6 @@ impl LookupTab {
         }
     }
 
-    // fn poll_lookup_promise(&mut self) {
-    //     if let Some(promise) = &self.lookup_promise {
-    //         if let std::task::Poll::Ready(result) = promise.poll() {
-    //             match result {
-    //                 Ok(data) => {
-    //                     let child_frame_id = self.child.clone().unwrap_or_default();
-    //                     let joint_config_map = vec_to_joint_map(data.joint_states.clone());
-
-    //                     let output = JsonOutputWithMetadata {
-    //                         child_frame_id: child_frame_id.clone(),
-    //                         parent_frame_id: self.parent.clone().unwrap_or_default(),
-    //                         transform: data.transform.transform.clone(),
-    //                         metadata: Metadata {
-    //                             tcp_id: child_frame_id,
-    //                             preferred_joint_configuration: joint_config_map,
-    //                             enable_transform: true,
-    //                             active_transform: false,
-    //                             gantry: data.gantry_position, // Use the fetched value here
-    //                         },
-    //                     };
-
-    //                     match serde_json::to_string_pretty(&output) {
-    //                         Ok(json_string) => self.lookup_result_json = Some(json_string),
-    //                         Err(e) => {
-    //                             self.lookup_error = Some(format!("JSON serialization error: {}", e))
-    //                         }
-    //                     }
-    //                 }
-    //                 Err(err) => self.lookup_error = Some(err.clone()),
-    //             }
-    //             self.lookup_promise = None;
-    //         }
-    //     }
-    // }
-
     fn poll_lookup_promise(&mut self) {
         if let Some(promise) = &self.lookup_promise {
             if let std::task::Poll::Ready(result) = promise.poll() {
@@ -364,6 +339,7 @@ impl LookupTab {
                     Ok(data) => {
                         let child_frame_id = self.child.clone().unwrap_or_default();
                         let joint_config_map = vec_to_joint_map(data.joint_states.clone());
+                        // let joint_config_map  = vec_to_joint_vec(data.joint_states.clone());
 
                         let output = JsonOutputWithMetadata {
                             // <--- We will store this

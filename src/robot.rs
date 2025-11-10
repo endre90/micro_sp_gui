@@ -896,9 +896,11 @@ pub fn robot_command_tab_to_state(tab: &RobotTab) -> Result<State, String> {
     let state = State::new();
 
     let request_trigger = bv!(&&format!("{}_request_trigger", robot_name));
+    let request_state = v!(&&format!("{}_request_state", robot_name));
     // let dashboard_request_trigger = bv!(&&format!("{}_dashboard_request_trigger", robot_name));
 
     let state = state.add(assign!(request_trigger, true.to_spvalue()));
+    let state = state.add(assign!(request_state, "initial".to_spvalue()));
     // let state = state.add(assign!(dashboard_request_trigger, false.to_spvalue()));
 
     let command_type = v!(&&format!("{}_command_type", robot_name));
