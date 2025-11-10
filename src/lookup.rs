@@ -5,10 +5,9 @@ use micro_sp::{
 };
 use ordered_float::OrderedFloat;
 use poll_promise::Promise;
+use rfd::FileDialog;
 use serde::Serialize;
 use std::{collections::HashMap, sync::Arc};
-
-// --- Helper Structs for JSON Output ---
 
 #[derive(Serialize)]
 struct PreferredJointConfiguration(HashMap<String, f64>);
@@ -68,7 +67,6 @@ async fn get_lookup_data(
         Err(e) => Err(e),
     }
 }
-
 
 async fn get_all_transforms(con: Arc<ConnectionManager>) -> HashMap<String, SPTransformStamped> {
     let mut connection = con.get_connection().await;
@@ -141,16 +139,6 @@ async fn lookup_transform(
     }
 }
 
-// pub struct LookupTab {
-//     get_all_transforms_promise: Option<Promise<HashMap<String, SPTransformStamped>>>,
-//     transform_keys: Vec<String>,
-//     parent: Option<String>,
-//     child: Option<String>,
-//     lookup_promise: Option<Promise<Result<SPTransformStamped, String>>>,
-//     lookup_result_json: Option<String>,
-//     lookup_error: Option<String>,
-// }
-
 pub struct LookupTab {
     robot_id_input: String,
     get_all_transforms_promise: Option<Promise<HashMap<String, SPTransformStamped>>>,
@@ -158,7 +146,8 @@ pub struct LookupTab {
     parent: Option<String>,
     child: Option<String>,
     lookup_promise: Option<Promise<LookupResult>>,
-    lookup_result_json: Option<String>,
+    // lookup_result_json: Option<String>,
+    lookup_output: Option<(JsonOutputWithMetadata, String)>,
     lookup_error: Option<String>,
 }
 
@@ -171,7 +160,8 @@ impl LookupTab {
             parent: None,
             child: None,
             lookup_promise: None,
-            lookup_result_json: None,
+            // lookup_result_json: None,
+            lookup_output: None,
             lookup_error: None,
         }
     }
@@ -262,6 +252,18 @@ impl LookupTab {
 
         ui.add_space(10.0);
 
+        if self.lookup_output.is_some() {
+            ui.horizontal(|ui| {
+                // This layout pushes the button to the far right
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("Save As").clicked() {
+                        self.save_json_to_file();
+                    }
+                });
+            });
+            ui.add_space(2.0); // Small space between button and output box
+        }
+
         // --- Window 2: Output (like MyApp's solution section) ---
         egui::Frame::default()
             .inner_margin(egui::Margin::same(0))
@@ -278,7 +280,8 @@ impl LookupTab {
 
         if let Some(error) = &self.lookup_error {
             ui.colored_label(egui::Color32::RED, format!("Error: {}", error));
-        } else if let Some(json_string) = &mut self.lookup_result_json {
+        // } else if let Some(json_string) = &mut self.lookup_result_json {
+        } else if let Some((_, json_string)) = &mut self.lookup_output {
             // ui.label("Resulting JSON:");
             // Use ScrollArea like in MyApp
             egui::ScrollArea::both()
@@ -295,74 +298,15 @@ impl LookupTab {
         } else {
             ui.label("\n    Result will appear here.");
         }
-
-        // if let Some(error) = &self.lookup_error {
-        //     ui.colored_label(egui::Color32::RED, format!("Error: {}", error));
-        // } else if let Some(json_string) = &mut self.lookup_result_json {
-        //     // ui.label("Resulting JSON:");
-        //     // Use ScrollArea like in MyApp
-        //     egui::ScrollArea::both()
-        //         .id_salt("lookup_json_scroll_area")
-        //         .auto_shrink([false; 2]) // Don't shrink
-        //         // .max_height(300.0)
-        //         .show(ui, |ui| {
-        //             ui.add(
-        //                 egui::TextEdit::multiline(json_string)
-        //                     .font(egui::FontId::monospace(12.0))
-        //                     .desired_width(f32::INFINITY),
-        //             );
-        //         });
-        // }
     }
-
-    // fn spawn_lookup_promise(
-    //     &mut self,
-    //     handle: &tokio::runtime::Handle,
-    //     connection: &Arc<ConnectionManager>,
-    // ) {
-    //     self.lookup_result_json = None;
-    //     self.lookup_error = None;
-
-    //     if let (Some(parent), Some(child)) = (self.parent.clone(), self.child.clone()) {
-    //         let handle = handle.clone();
-    //         let con_clone = connection.clone();
-    //         self.lookup_promise = Some(Promise::spawn_thread("lookup_fetcher", move || {
-    //             handle.block_on(lookup_transform(con_clone, &parent, &child))
-    //         }));
-    //     }
-    // }
-
-    // fn poll_lookup_promise(&mut self) {
-    //     if let Some(promise) = &self.lookup_promise {
-    //         if let std::task::Poll::Ready(result) = promise.poll() {
-    //             match result {
-    //                 Ok(transform) => {
-    //                     let output = JsonOutputTransform {
-    //                         child_frame_id: self.child.clone().unwrap_or_default(),
-    //                         parent_frame_id: self.parent.clone().unwrap_or_default(),
-    //                         transform: transform.transform.clone(),
-    //                     };
-
-    //                     match serde_json::to_string_pretty(&output) {
-    //                         Ok(json_string) => self.lookup_result_json = Some(json_string),
-    //                         Err(e) => {
-    //                             self.lookup_error = Some(format!("JSON serialization error: {}", e))
-    //                         }
-    //                     }
-    //                 }
-    //                 Err(err) => self.lookup_error = Some(err.clone()),
-    //             }
-    //             self.lookup_promise = None;
-    //         }
-    //     }
-    // }
 
     fn spawn_lookup_promise(
         &mut self,
         handle: &tokio::runtime::Handle,
         connection: &Arc<ConnectionManager>,
     ) {
-        self.lookup_result_json = None;
+        // self.lookup_result_json = None;
+        self.lookup_output = None;
         self.lookup_error = None;
 
         if let (Some(parent), Some(child), robot_id_input) = (
@@ -395,7 +339,7 @@ impl LookupTab {
     //                             preferred_joint_configuration: joint_config_map,
     //                             enable_transform: true,
     //                             active_transform: false,
-    //                             gantry: 2360.669,
+    //                             gantry: data.gantry_position, // Use the fetched value here
     //                         },
     //                     };
 
@@ -422,6 +366,7 @@ impl LookupTab {
                         let joint_config_map = vec_to_joint_map(data.joint_states.clone());
 
                         let output = JsonOutputWithMetadata {
+                            // <--- We will store this
                             child_frame_id: child_frame_id.clone(),
                             parent_frame_id: self.parent.clone().unwrap_or_default(),
                             transform: data.transform.transform.clone(),
@@ -430,12 +375,14 @@ impl LookupTab {
                                 preferred_joint_configuration: joint_config_map,
                                 enable_transform: true,
                                 active_transform: false,
-                                gantry: data.gantry_position, // Use the fetched value here
+                                gantry: data.gantry_position,
                             },
                         };
 
                         match serde_json::to_string_pretty(&output) {
-                            Ok(json_string) => self.lookup_result_json = Some(json_string),
+                            // OLD: Ok(json_string) => self.lookup_result_json = Some(json_string),
+                            // NEW:
+                            Ok(json_string) => self.lookup_output = Some((output, json_string)),
                             Err(e) => {
                                 self.lookup_error = Some(format!("JSON serialization error: {}", e))
                             }
@@ -495,6 +442,31 @@ impl LookupTab {
         self.get_all_transforms_promise = Some(Promise::spawn_thread("fetcher", move || {
             handle.block_on(get_all_transforms(con_clone))
         }));
+    }
+
+    fn save_json_to_file(&self) {
+        // We use the data stored in self.lookup_output
+        if let Some((output_data, json_content)) = &self.lookup_output {
+            // Create a default filename like "parent_to_child.json"
+            let default_filename = format!(
+                "{}_to_{}.json",
+                output_data.parent_frame_id, output_data.child_frame_id
+            );
+
+            // Open the native "Save File" dialog
+            let file_path = FileDialog::new()
+                .add_filter("JSON", &["json"])
+                .set_file_name(&default_filename)
+                .save_file();
+
+            // If the user selected a path (didn't cancel)
+            if let Some(path) = file_path {
+                match std::fs::write(&path, json_content) {
+                    Ok(_) => log::info!("Successfully saved JSON to {:?}", path),
+                    Err(e) => log::error!("Failed to save file: {}", e),
+                }
+            }
+        }
     }
 }
 
