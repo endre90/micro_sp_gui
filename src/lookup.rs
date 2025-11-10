@@ -42,6 +42,7 @@ fn vec_to_joint_map(joints: Vec<f64>) -> PreferredJointConfiguration {
 struct LookupData {
     transform: SPTransformStamped,
     joint_states: Vec<f64>,
+    gantry_position: f64,
 }
 
 type LookupResult = Result<LookupData, String>;
@@ -52,26 +53,22 @@ async fn get_lookup_data(
     parent: String,
     child: String,
 ) -> LookupResult {
-    let (transform_res, joints_res) = tokio::join!(
+    let (transform_res, joints_res, gantry_res) = tokio::join!(
         lookup_transform(con.clone(), &parent, &child),
-        get_joint_states(con.clone(), &robot_id)
+        get_joint_states(con.clone(), &robot_id),
+        get_opc_current_position(con.clone())
     );
 
     match transform_res {
         Ok(transform) => Ok(LookupData {
             transform,
             joint_states: joints_res,
+            gantry_position: gantry_res,
         }),
         Err(e) => Err(e),
     }
 }
 
-#[derive(Serialize)]
-struct JsonOutputTransform {
-    child_frame_id: String,
-    parent_frame_id: String,
-    transform: SPTransform,
-}
 
 async fn get_all_transforms(con: Arc<ConnectionManager>) -> HashMap<String, SPTransformStamped> {
     let mut connection = con.get_connection().await;
@@ -81,6 +78,20 @@ async fn get_all_transforms(con: Arc<ConnectionManager>) -> HashMap<String, SPTr
             log::error!("GUI Failed to get all transforms with: {e}!");
             HashMap::new()
         }
+    }
+}
+
+async fn get_opc_current_position(con: Arc<ConnectionManager>) -> f64 {
+    let mut connection = con.get_connection().await;
+    match StateManager::get_sp_value(&mut connection, "opc_current_position").await {
+        Some(sp_value) => {
+            if let SPValue::Float64(FloatOrUnknown::Float64(OrderedFloat(x))) = sp_value {
+                x
+            } else {
+                0.0
+            }
+        }
+        None => 0.0,
     }
 }
 
@@ -367,6 +378,41 @@ impl LookupTab {
         }
     }
 
+    // fn poll_lookup_promise(&mut self) {
+    //     if let Some(promise) = &self.lookup_promise {
+    //         if let std::task::Poll::Ready(result) = promise.poll() {
+    //             match result {
+    //                 Ok(data) => {
+    //                     let child_frame_id = self.child.clone().unwrap_or_default();
+    //                     let joint_config_map = vec_to_joint_map(data.joint_states.clone());
+
+    //                     let output = JsonOutputWithMetadata {
+    //                         child_frame_id: child_frame_id.clone(),
+    //                         parent_frame_id: self.parent.clone().unwrap_or_default(),
+    //                         transform: data.transform.transform.clone(),
+    //                         metadata: Metadata {
+    //                             tcp_id: child_frame_id,
+    //                             preferred_joint_configuration: joint_config_map,
+    //                             enable_transform: true,
+    //                             active_transform: false,
+    //                             gantry: 2360.669,
+    //                         },
+    //                     };
+
+    //                     match serde_json::to_string_pretty(&output) {
+    //                         Ok(json_string) => self.lookup_result_json = Some(json_string),
+    //                         Err(e) => {
+    //                             self.lookup_error = Some(format!("JSON serialization error: {}", e))
+    //                         }
+    //                     }
+    //                 }
+    //                 Err(err) => self.lookup_error = Some(err.clone()),
+    //             }
+    //             self.lookup_promise = None;
+    //         }
+    //     }
+    // }
+
     fn poll_lookup_promise(&mut self) {
         if let Some(promise) = &self.lookup_promise {
             if let std::task::Poll::Ready(result) = promise.poll() {
@@ -384,7 +430,7 @@ impl LookupTab {
                                 preferred_joint_configuration: joint_config_map,
                                 enable_transform: true,
                                 active_transform: false,
-                                gantry: 2360.669,
+                                gantry: data.gantry_position, // Use the fetched value here
                             },
                         };
 
