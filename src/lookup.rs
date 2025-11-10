@@ -1,10 +1,70 @@
 use eframe::egui;
-use micro_sp::{ConnectionManager, SPTransform, SPTransformStamped, TransformsManager};
+use micro_sp::{
+    ConnectionManager, FloatOrUnknown, SPTransform, SPTransformStamped, SPValue, StateManager,
+    TransformsManager,
+};
+use ordered_float::OrderedFloat;
 use poll_promise::Promise;
 use serde::Serialize;
 use std::{collections::HashMap, sync::Arc};
 
-// --- Helper Functions (moved from lib.rs) ---
+// --- Helper Structs for JSON Output ---
+
+#[derive(Serialize)]
+struct PreferredJointConfiguration(HashMap<String, f64>);
+
+#[derive(Serialize)]
+struct Metadata {
+    tcp_id: String,
+    preferred_joint_configuration: PreferredJointConfiguration,
+    enable_transform: bool,
+    active_transform: bool,
+    gantry: f64,
+}
+
+#[derive(Serialize)]
+struct JsonOutputWithMetadata {
+    child_frame_id: String,
+    parent_frame_id: String,
+    transform: SPTransform,
+    metadata: Metadata,
+}
+
+fn vec_to_joint_map(joints: Vec<f64>) -> PreferredJointConfiguration {
+    let map = joints
+        .into_iter()
+        .enumerate()
+        .map(|(i, val)| (format!("j{}", i), val))
+        .collect::<HashMap<String, f64>>();
+    PreferredJointConfiguration(map)
+}
+
+struct LookupData {
+    transform: SPTransformStamped,
+    joint_states: Vec<f64>,
+}
+
+type LookupResult = Result<LookupData, String>;
+
+async fn get_lookup_data(
+    con: Arc<ConnectionManager>,
+    robot_id: &str,
+    parent: String,
+    child: String,
+) -> LookupResult {
+    let (transform_res, joints_res) = tokio::join!(
+        lookup_transform(con.clone(), &parent, &child),
+        get_joint_states(con.clone(), &robot_id)
+    );
+
+    match transform_res {
+        Ok(transform) => Ok(LookupData {
+            transform,
+            joint_states: joints_res,
+        }),
+        Err(e) => Err(e),
+    }
+}
 
 #[derive(Serialize)]
 struct JsonOutputTransform {
@@ -24,6 +84,37 @@ async fn get_all_transforms(con: Arc<ConnectionManager>) -> HashMap<String, SPTr
     }
 }
 
+async fn get_joint_states(con: Arc<ConnectionManager>, robot_id: &str) -> Vec<f64> {
+    let mut connection = con.get_connection().await;
+    match StateManager::get_sp_value(&mut connection, &format!("{}_joint_states", robot_id)).await {
+        Some(joint_states) => {
+            if let SPValue::Array(micro_sp::ArrayOrUnknown::Array(joint_states_of_sp_value)) =
+                joint_states
+            {
+                joint_states_of_sp_value
+                    .iter()
+                    .map(|j| {
+                        if let SPValue::Float64(FloatOrUnknown::Float64(OrderedFloat(
+                            joint_value,
+                        ))) = j
+                        {
+                            joint_value.to_owned()
+                        } else {
+                            0.0
+                        }
+                    })
+                    .collect::<Vec<f64>>()
+            } else {
+                vec![]
+            }
+        }
+        None => {
+            log::error!("GUI Failed to get joint states for robot {}", robot_id);
+            vec![]
+        }
+    }
+}
+
 async fn lookup_transform(
     con: Arc<ConnectionManager>,
     parent: &str,
@@ -39,12 +130,23 @@ async fn lookup_transform(
     }
 }
 
+// pub struct LookupTab {
+//     get_all_transforms_promise: Option<Promise<HashMap<String, SPTransformStamped>>>,
+//     transform_keys: Vec<String>,
+//     parent: Option<String>,
+//     child: Option<String>,
+//     lookup_promise: Option<Promise<Result<SPTransformStamped, String>>>,
+//     lookup_result_json: Option<String>,
+//     lookup_error: Option<String>,
+// }
+
 pub struct LookupTab {
+    robot_id_input: String,
     get_all_transforms_promise: Option<Promise<HashMap<String, SPTransformStamped>>>,
     transform_keys: Vec<String>,
     parent: Option<String>,
     child: Option<String>,
-    lookup_promise: Option<Promise<Result<SPTransformStamped, String>>>,
+    lookup_promise: Option<Promise<LookupResult>>,
     lookup_result_json: Option<String>,
     lookup_error: Option<String>,
 }
@@ -52,6 +154,7 @@ pub struct LookupTab {
 impl LookupTab {
     pub fn new() -> Self {
         Self {
+            robot_id_input: "r1".to_string(),
             get_all_transforms_promise: None,
             transform_keys: Vec::new(),
             parent: None,
@@ -68,7 +171,22 @@ impl LookupTab {
         handle: &tokio::runtime::Handle,
         connection: &Arc<ConnectionManager>,
     ) {
-        ui.heading("Transforms Lookup GUI");
+        ui.horizontal(|ui| {
+            ui.heading("Transforms Lookup GUI"); // This stays on the left
+
+            // Add all right-aligned items here, in reverse order
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                // 1. The Button (will be furthest right)
+
+                // 2. The Text Box (will be to the left of the button)
+                // We make it "small" by setting a desired_width.
+                let text_box =
+                    egui::TextEdit::singleline(&mut self.robot_id_input).desired_width(50.0); // Adjust width as needed
+                ui.add(text_box);
+                ui.label("Robot ID:");
+                // 3. The Label (will be to the left of the text box)
+            });
+        });
         ui.separator();
 
         // --- Window 1: Controls (like MyApp's input frame) ---
@@ -147,7 +265,7 @@ impl LookupTab {
         ui.set_min_width(480.0); // Match control panel
         ui.set_min_height(240.0); // Give output area some space
 
-         if let Some(error) = &self.lookup_error {
+        if let Some(error) = &self.lookup_error {
             ui.colored_label(egui::Color32::RED, format!("Error: {}", error));
         } else if let Some(json_string) = &mut self.lookup_result_json {
             // ui.label("Resulting JSON:");
@@ -186,6 +304,48 @@ impl LookupTab {
         // }
     }
 
+    // fn spawn_lookup_promise(
+    //     &mut self,
+    //     handle: &tokio::runtime::Handle,
+    //     connection: &Arc<ConnectionManager>,
+    // ) {
+    //     self.lookup_result_json = None;
+    //     self.lookup_error = None;
+
+    //     if let (Some(parent), Some(child)) = (self.parent.clone(), self.child.clone()) {
+    //         let handle = handle.clone();
+    //         let con_clone = connection.clone();
+    //         self.lookup_promise = Some(Promise::spawn_thread("lookup_fetcher", move || {
+    //             handle.block_on(lookup_transform(con_clone, &parent, &child))
+    //         }));
+    //     }
+    // }
+
+    // fn poll_lookup_promise(&mut self) {
+    //     if let Some(promise) = &self.lookup_promise {
+    //         if let std::task::Poll::Ready(result) = promise.poll() {
+    //             match result {
+    //                 Ok(transform) => {
+    //                     let output = JsonOutputTransform {
+    //                         child_frame_id: self.child.clone().unwrap_or_default(),
+    //                         parent_frame_id: self.parent.clone().unwrap_or_default(),
+    //                         transform: transform.transform.clone(),
+    //                     };
+
+    //                     match serde_json::to_string_pretty(&output) {
+    //                         Ok(json_string) => self.lookup_result_json = Some(json_string),
+    //                         Err(e) => {
+    //                             self.lookup_error = Some(format!("JSON serialization error: {}", e))
+    //                         }
+    //                     }
+    //                 }
+    //                 Err(err) => self.lookup_error = Some(err.clone()),
+    //             }
+    //             self.lookup_promise = None;
+    //         }
+    //     }
+    // }
+
     fn spawn_lookup_promise(
         &mut self,
         handle: &tokio::runtime::Handle,
@@ -194,11 +354,15 @@ impl LookupTab {
         self.lookup_result_json = None;
         self.lookup_error = None;
 
-        if let (Some(parent), Some(child)) = (self.parent.clone(), self.child.clone()) {
+        if let (Some(parent), Some(child), robot_id_input) = (
+            self.parent.clone(),
+            self.child.clone(),
+            self.robot_id_input.clone(),
+        ) {
             let handle = handle.clone();
             let con_clone = connection.clone();
             self.lookup_promise = Some(Promise::spawn_thread("lookup_fetcher", move || {
-                handle.block_on(lookup_transform(con_clone, &parent, &child))
+                handle.block_on(get_lookup_data(con_clone, &robot_id_input, parent, child))
             }));
         }
     }
@@ -207,11 +371,21 @@ impl LookupTab {
         if let Some(promise) = &self.lookup_promise {
             if let std::task::Poll::Ready(result) = promise.poll() {
                 match result {
-                    Ok(transform) => {
-                        let output = JsonOutputTransform {
-                            child_frame_id: self.child.clone().unwrap_or_default(),
+                    Ok(data) => {
+                        let child_frame_id = self.child.clone().unwrap_or_default();
+                        let joint_config_map = vec_to_joint_map(data.joint_states.clone());
+
+                        let output = JsonOutputWithMetadata {
+                            child_frame_id: child_frame_id.clone(),
                             parent_frame_id: self.parent.clone().unwrap_or_default(),
-                            transform: transform.transform.clone(),
+                            transform: data.transform.transform.clone(),
+                            metadata: Metadata {
+                                tcp_id: child_frame_id,
+                                preferred_joint_configuration: joint_config_map,
+                                enable_transform: true,
+                                active_transform: false,
+                                gantry: 2360.669,
+                            },
                         };
 
                         match serde_json::to_string_pretty(&output) {

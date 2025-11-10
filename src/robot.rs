@@ -114,8 +114,8 @@ async fn send_robot_command(state: &State, con: Arc<ConnectionManager>) -> () {
 
 #[derive(Debug, Clone, PartialEq)]
 enum CommandType {
-    MoveL,
-    MoveJ,
+    UnsafeMoveL,
+    UnsafeMoveJ,
     SafeMoveL,
     SafeMoveJ,
     PickVacuum,
@@ -125,8 +125,8 @@ enum CommandType {
 impl std::fmt::Display for CommandType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            CommandType::MoveL => write!(f, "move_l"),
-            CommandType::MoveJ => write!(f, "move_j"),
+            CommandType::UnsafeMoveL => write!(f, "unsafe_move_l"),
+            CommandType::UnsafeMoveJ => write!(f, "unsafe_move_j"),
             CommandType::SafeMoveL => write!(f, "safe_move_l"),
             CommandType::SafeMoveJ => write!(f, "safe_move_j"),
             CommandType::PickVacuum => write!(f, "pick_vacuum"),
@@ -138,8 +138,8 @@ impl std::fmt::Display for CommandType {
 impl CommandType {
     fn variants() -> &'static [CommandType] {
         &[
-            CommandType::MoveL,
-            CommandType::MoveJ,
+            CommandType::UnsafeMoveL,
+            CommandType::UnsafeMoveJ,
             CommandType::SafeMoveL,
             CommandType::SafeMoveJ,
             CommandType::PickVacuum,
@@ -205,7 +205,7 @@ impl RobotTab {
             selected_baseframe: Some("base_link".to_string()),
             // selected_root: Some("world".to_string()),
             // --- Command State ---
-            command_type: CommandType::MoveL,
+            command_type: CommandType::UnsafeMoveL,
             acceleration: 0.1,
             velocity: 0.1,
             global_acceleration_scaling: 1.0,
@@ -353,11 +353,22 @@ impl RobotTab {
                                     );
                                 }
                             });
+                        ui.label("ℹ").on_hover_text(
+                            "Specify what the robot should do. \n\
+                             MoveL is a linear move in tool space. \n\
+                             MoveJ is a linear move in joint space. \n\
+                             Unsafe means that the robot will enter protective \n\
+                             stop if an ostacle is hit along the way. \n\
+                             Safe means that another thread is monitoring the \n\
+                             force exerted on the robot. If that force exceeds \n\
+                             the 'Force Threshold' (set below in Misc), the robot \n\
+                             will stop moving without entering protective stop.",
+                        );
                     });
 
                     let accel_vel_suffix = match self.command_type {
-                        CommandType::MoveL => " m/s²",
-                        CommandType::MoveJ => " rad/s²",
+                        CommandType::UnsafeMoveL => " m/s²",
+                        CommandType::UnsafeMoveJ => " rad/s²",
                         CommandType::SafeMoveL => " m/s²",
                         CommandType::SafeMoveJ => " rad/s²",
                         CommandType::PickVacuum => " m/s²",
