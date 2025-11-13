@@ -163,6 +163,10 @@ pub struct RobotTab {
 
     // --- Command State ---
     command_type: CommandType,
+    command_trigger: bool,
+    dashboard_command: String,
+    dashboard_trigger: bool,
+    cancel_request: bool,
     acceleration: f64,
     velocity: f64,
     global_acceleration_scaling: f64,
@@ -187,7 +191,7 @@ pub struct RobotTab {
     execution_time_s: f64,
     force_threshold: f64,
     use_relative_pose: bool,
-    relative_pose: [f64; 6]
+    relative_pose: [f64; 6],
 }
 
 impl RobotTab {
@@ -206,6 +210,10 @@ impl RobotTab {
             // selected_root: Some("world".to_string()),
             // --- Command State ---
             command_type: CommandType::UnsafeMoveL,
+            command_trigger: false,
+            dashboard_command: "stop".to_string(),
+            dashboard_trigger: false,
+            cancel_request: false,
             acceleration: 0.1,
             velocity: 0.1,
             global_acceleration_scaling: 1.0,
@@ -230,7 +238,7 @@ impl RobotTab {
             execution_time_s: 0.0,
             force_threshold: 20.0,
             use_relative_pose: false,
-            relative_pose: [0.0; 6]
+            relative_pose: [0.0; 6],
         }
     }
 
@@ -257,13 +265,38 @@ impl RobotTab {
             // Add all right-aligned items here, in reverse order
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 // 1. The Button (will be furthest right)
-                ui.add_enabled(true, egui::Button::new("Stop"));
+                if ui.add_enabled(true, egui::Button::new("Stop")).clicked() {
+                    // self.dashboard_trigger = true;
+                    // self.command_trigger = false;
+                    self.cancel_request = true;
+                    self.dashboard_command = "stop".to_string();
+                    self.spawn_robot_control_promise(handle, connection)
+                }
+
+                ui.label("ℹ").on_hover_text(
+                            "Press Stop after Reset Protective Stop \n\
+                             to put the robot back to the Normal operation state.",
+                        );
+
+                if ui
+                    .add_enabled(true, egui::Button::new("Reset Protective Stop"))
+                    .clicked()
+                {
+                    self.dashboard_trigger = true;
+                    self.command_trigger = false;
+                    // self.cancel_request = true;
+                    self.dashboard_command = "reset_protective_stop".to_string();
+                    self.spawn_robot_control_promise(handle, connection)
+                };
 
                 // The `.clicked()` method returns true on the frame the button is pressed
                 if ui
                     .add_enabled(true, egui::Button::new("Send Command"))
                     .clicked()
                 {
+                    self.dashboard_trigger = false;
+                    self.command_trigger = true;
+                    self.cancel_request = false;
                     self.spawn_robot_control_promise(handle, connection)
                 }
 
@@ -433,8 +466,6 @@ impl RobotTab {
                         ui.label("ℹ")
                             .on_hover_text("Use joint positions instead of a goal pose.");
                     });
-
-
 
                     // ui.separator();
 
@@ -891,15 +922,16 @@ fn draw_relative_pose_inputs(ui: &mut egui::Ui, poses: &mut [f64; 6], id_prefix:
 
 // Should have one for dashboard as well
 pub fn robot_command_tab_to_state(tab: &RobotTab) -> Result<State, String> {
-    println!("trigerred");
     let robot_name = &tab.robot_id_input;
     let state = State::new();
 
     let request_trigger = bv!(&&format!("{}_request_trigger", robot_name));
     let request_state = v!(&&format!("{}_request_state", robot_name));
+    let request_cancel = bv!(&&format!("{}_request_cancel", robot_name));
     // let dashboard_request_trigger = bv!(&&format!("{}_dashboard_request_trigger", robot_name));
 
-    let state = state.add(assign!(request_trigger, true.to_spvalue()));
+    let state = state.add(assign!(request_trigger, tab.command_trigger.to_spvalue()));
+    let state = state.add(assign!(request_cancel, tab.cancel_request.to_spvalue()));
     let state = state.add(assign!(request_state, "initial".to_spvalue()));
     // let state = state.add(assign!(dashboard_request_trigger, false.to_spvalue()));
 
@@ -910,6 +942,10 @@ pub fn robot_command_tab_to_state(tab: &RobotTab) -> Result<State, String> {
     // Is this Dashboard? We should also have protective stop / violation release, pause and continue, get into remote control, set max force (safety)
     // let global_acceleration_scaling = fv!(&&format!("{}_global_acceleration_scaling", robot_name));
     // let global_velocity_scaling = fv!(&&format!("{}_global_velocity_scaling", robot_name));
+
+    let dashboard_request_trigger = bv!(&&format!("{}_dashboard_request_trigger", robot_name));
+    let dashboard_request_state = v!(&&format!("{}_dashboard_request_state", robot_name));
+    let dashboard_command = v!(&&format!("{}_dashboard_command", robot_name));
     let use_execution_time = bv!(&&format!("{}_use_execution_time", robot_name));
     let execution_time = fv!(&&format!("{}_execution_time", robot_name));
     let use_blend_radius = bv!(&&format!("{}_use_blend_radius", robot_name));
@@ -934,6 +970,16 @@ pub fn robot_command_tab_to_state(tab: &RobotTab) -> Result<State, String> {
     // let estimated_position = v!(&&format!("{}_estimated_position", robot_name));
     let use_relative_pose = bv!(&&format!("{}_use_relative_pose", robot_name));
     let relative_pose = av!(&&format!("{}_relative_pose", robot_name));
+
+    let state = state.add(assign!(
+        dashboard_request_trigger,
+        tab.dashboard_trigger.to_spvalue()
+    ));
+    let state = state.add(assign!(dashboard_request_state, "initial".to_spvalue()));
+    let state = state.add(assign!(
+        dashboard_command,
+        SPValue::String(StringOrUnknown::String(tab.dashboard_command.clone()))
+    ));
 
     let state = state.add(assign!(
         command_type,
@@ -1011,46 +1057,49 @@ pub fn robot_command_tab_to_state(tab: &RobotTab) -> Result<State, String> {
         payload,
         SPValue::String(StringOrUnknown::String(tab.saved_payload.to_string()))
     ));
-    let state = match &tab.selected_baseframe {
-        Some(baseframe) => state.add(assign!(
-            baseframe_id,
-            SPValue::String(StringOrUnknown::String(baseframe.to_owned()))
-        )),
-        None => {
-            log::error!("Baseframe not selected");
-            return Err(format!("Baseframe not selected"));
+    let mut state = state.clone();
+    if tab.command_trigger {
+        state = match &tab.selected_baseframe {
+            Some(baseframe) => state.add(assign!(
+                baseframe_id,
+                SPValue::String(StringOrUnknown::String(baseframe.to_owned()))
+            )),
+            None => {
+                log::error!("Baseframe not selected");
+                return Err(format!("Baseframe not selected"));
+            }
+        };
+        state = match &tab.selected_faceplate {
+            Some(faceplate) => state.add(assign!(
+                faceplate_id,
+                SPValue::String(StringOrUnknown::String(faceplate.to_owned()))
+            )),
+            None => {
+                log::error!("Faceplate not selected");
+                return Err(format!("Faceplate not selected"));
+            }
+        };
+        state = match &tab.selected_goal_feature_id {
+            Some(goal_feature) => state.add(assign!(
+                goal_feature_id,
+                SPValue::String(StringOrUnknown::String(goal_feature.to_owned()))
+            )),
+            None => {
+                log::error!("Goal feature not selected");
+                return Err(format!("Goal feature not selected"));
+            }
+        };
+        state = match &tab.selected_tcp {
+            Some(tcp) => state.add(assign!(
+                tcp_id,
+                SPValue::String(StringOrUnknown::String(tcp.to_owned()))
+            )),
+            None => {
+                log::error!("Tcp not selected");
+                return Err(format!("Tcp not selected"));
+            }
         }
-    };
-    let state = match &tab.selected_faceplate {
-        Some(faceplate) => state.add(assign!(
-            faceplate_id,
-            SPValue::String(StringOrUnknown::String(faceplate.to_owned()))
-        )),
-        None => {
-            log::error!("Faceplate not selected");
-            return Err(format!("Faceplate not selected"));
-        }
-    };
-    let state = match &tab.selected_goal_feature_id {
-        Some(goal_feature) => state.add(assign!(
-            goal_feature_id,
-            SPValue::String(StringOrUnknown::String(goal_feature.to_owned()))
-        )),
-        None => {
-            log::error!("Goal feature not selected");
-            return Err(format!("Goal feature not selected"));
-        }
-    };
-    let state = match &tab.selected_tcp {
-        Some(tcp) => state.add(assign!(
-            tcp_id,
-            SPValue::String(StringOrUnknown::String(tcp.to_owned()))
-        )),
-        None => {
-            log::error!("Tcp not selected");
-            return Err(format!("Tcp not selected"));
-        }
-    };
+    }
 
     let state = state.add(assign!(
         root_frame_id,
