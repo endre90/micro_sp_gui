@@ -4,6 +4,13 @@ use ordered_float::OrderedFloat;
 use poll_promise::Promise;
 use std::{collections::HashMap, fmt, sync::Arc};
 
+pub const RSP_ONLY_PAYLOAD: &str = "0.69,[0.026,-0.008,0.012],[0.0,0.0,0.0,0.0,0.0,0.0]";
+pub const RSP_AND_SPONGE_PAYLOAD: &str = "1.88,[0.002,0.003,0.071],[0.0,0.0,0.0,0.0,0.0,0.0]";
+pub const RSP_AND_GRIPPER_PAYLOAD: &str = "2.24,[-0.001,0.002,0.068],[0.0,0.0,0.0,0.0,0.0,0.0]";
+pub const RSP_AND_BVT_PAYLOAD: &str = "1.3,[0.001,0.005,0.06],[0.0,0.0,0.0,0.0,0.0,0.0]";
+pub const RSP_AND_SVT_PAYLOAD: &str = "1.3,[0.001,0.005,0.06],[0.0,0.0,0.0,0.0,0.0,0.0]";
+pub const RSP_AND_PHOTONEO_PAYLOAD: &str = "3.29,[0.008,0.003,0.082],[0.0,0.0,0.0,0.0,0.0,0.0]";
+
 #[derive(Debug, Clone, PartialEq)]
 enum SavedPayload {
     Gripper,
@@ -11,7 +18,7 @@ enum SavedPayload {
     Bvt,
     Photoneo,
     Sponge,
-    None,
+    None // Actually, rsp
 }
 
 impl std::fmt::Display for SavedPayload {
@@ -471,9 +478,7 @@ impl RobotTab {
 
                     ui.checkbox(&mut self.use_joint_positions, "Use Joint Positions");
 
-                    // Everything in this section is disabled if `use_payload` is false
                     ui.add_enabled_ui(self.use_joint_positions, |ui| {
-                        // --- Dropdown for saved payloads ---
                         // Disabled if "Set Manual" is checked
                         ui.add_enabled_ui(!self.set_manual_joint_positions, |ui| {
                             ui.horizontal(|ui| {
@@ -1055,7 +1060,14 @@ pub fn robot_command_tab_to_state(tab: &RobotTab) -> Result<State, String> {
     ));
     let state = state.add(assign!(
         payload,
-        SPValue::String(StringOrUnknown::String(tab.saved_payload.to_string()))
+        SPValue::String(StringOrUnknown::String( match tab.saved_payload {
+            SavedPayload::Gripper => RSP_AND_GRIPPER_PAYLOAD.to_string(),
+            SavedPayload::Svt => RSP_AND_SVT_PAYLOAD.to_string(),
+            SavedPayload::Bvt => RSP_AND_BVT_PAYLOAD.to_string(),
+            SavedPayload::Photoneo => RSP_AND_PHOTONEO_PAYLOAD.to_string(),
+            SavedPayload::Sponge => RSP_AND_SPONGE_PAYLOAD.to_string(),
+            SavedPayload::None => RSP_ONLY_PAYLOAD.to_string(),
+        }))
     ));
     let mut state = state.clone();
     if tab.command_trigger {

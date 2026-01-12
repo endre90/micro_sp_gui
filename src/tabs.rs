@@ -13,6 +13,7 @@ enum AppTab {
     Transforms,
     Lookup,
     AnotherTab,
+    OperationStateTab,
 }
 
 pub struct MyApp {
@@ -22,6 +23,7 @@ pub struct MyApp {
     lookup_tab: crate::lookup::LookupTab,
     robot_tab: crate::robot::RobotTab,
     another_tab: crate::another::AnotherTab,
+    operation_state_tab: crate::operation_state::OperationStateTab,
     active_tab: AppTab,
 }
 
@@ -44,6 +46,7 @@ impl MyApp {
             lookup_tab: crate::lookup::LookupTab::new(),
             robot_tab: crate::robot::RobotTab::new(),
             another_tab: crate::another::AnotherTab::new(),
+            operation_state_tab: crate::operation_state::OperationStateTab::new("sp1"),
             active_tab: AppTab::RobotTab,
         }
     }
@@ -60,6 +63,7 @@ impl MyApp {
             ui.selectable_value(&mut self.active_tab, AppTab::Lookup, "Lookup");
             ui.selectable_value(&mut self.active_tab, AppTab::RobotTab, "Robot Controller");
             ui.selectable_value(&mut self.active_tab, AppTab::AnotherTab, "Order Handler");
+            ui.selectable_value(&mut self.active_tab, AppTab::OperationStateTab, "Operation State");
         });
 
         ui.separator();
@@ -75,6 +79,10 @@ impl MyApp {
             }
             AppTab::Lookup => {
                 self.lookup_tab.ui(ui, &self.handle, &self.connection);
+            }
+
+            AppTab::OperationStateTab => {
+                self.operation_state_tab.ui(ui, &self.handle, &self.connection);
             }
 
             AppTab::AnotherTab => {
