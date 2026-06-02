@@ -15,7 +15,7 @@ impl TransformsTab {
     }
     /// Draw the UI for the "Another" tab
     pub fn ui(&mut self, ui: &mut egui::Ui) {
-        ui.heading("This is Another Tab");
+        ui.heading("Transforms tab asdf");
         ui.label("You can put completely different UI elements here.");
         ui.add_space(10.0);
         ui.label("For example, this could be a settings page, a log viewer, or another tool.");

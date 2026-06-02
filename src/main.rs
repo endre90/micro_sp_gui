@@ -5,6 +5,8 @@ mod lookup;
 mod robot;
 mod operation_state;
 mod tabs;
+mod goals;
+mod orders;
 
 #[tokio::main]
 async fn main() -> Result<(), eframe::Error> {

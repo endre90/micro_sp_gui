@@ -14,6 +14,8 @@ enum AppTab {
     Lookup,
     AnotherTab,
     OperationStateTab,
+    GoalsTab,
+    ItemOrderTab
 }
 
 pub struct MyApp {
@@ -24,6 +26,8 @@ pub struct MyApp {
     robot_tab: crate::robot::RobotTab,
     another_tab: crate::another::AnotherTab,
     operation_state_tab: crate::operation_state::OperationStateTab,
+    goals_tab: crate::goals::GoalsTab,
+    item_order_tab: crate::orders::ItemOrderTab,
     active_tab: AppTab,
 }
 
@@ -47,6 +51,8 @@ impl MyApp {
             robot_tab: crate::robot::RobotTab::new(),
             another_tab: crate::another::AnotherTab::new(),
             operation_state_tab: crate::operation_state::OperationStateTab::new("sp1"),
+            goals_tab: crate::goals::GoalsTab::new("sp1"),
+            item_order_tab: crate::orders::ItemOrderTab::new("sp1"),
             active_tab: AppTab::RobotTab,
         }
     }
@@ -62,8 +68,13 @@ impl MyApp {
             );
             ui.selectable_value(&mut self.active_tab, AppTab::Lookup, "Lookup");
             ui.selectable_value(&mut self.active_tab, AppTab::RobotTab, "Robot Controller");
-            ui.selectable_value(&mut self.active_tab, AppTab::AnotherTab, "Order Handler");
-            ui.selectable_value(&mut self.active_tab, AppTab::OperationStateTab, "Operation State");
+            ui.selectable_value(&mut self.active_tab, AppTab::ItemOrderTab, "Order Handler");
+            ui.selectable_value(
+                &mut self.active_tab,
+                AppTab::OperationStateTab,
+                "Operation State",
+            );
+            ui.selectable_value(&mut self.active_tab, AppTab::GoalsTab, "Goals");
         });
 
         ui.separator();
@@ -82,7 +93,16 @@ impl MyApp {
             }
 
             AppTab::OperationStateTab => {
-                self.operation_state_tab.ui(ui, &self.handle, &self.connection);
+                self.operation_state_tab
+                    .ui(ui, &self.handle, &self.connection);
+            }
+
+            AppTab::GoalsTab => {
+                self.goals_tab.ui(ui, &self.handle, &self.connection);
+            }
+
+            AppTab::ItemOrderTab => {
+                self.item_order_tab.ui(ui, &self.connection);
             }
 
             AppTab::AnotherTab => {
