@@ -178,7 +178,7 @@ impl ItemOrderTab {
             for i in 0..ITEM_TYPES {
                 if counts[i] > 0 {
                     let goal = format!("var:count_picked_{} == {}", item_names[i], counts[i]);
-                    let uq_goal = goal_string_to_sp_value(&goal, priority);
+                    let uq_goal = goal_string_to_sp_value(&nanoid::nanoid!(10), &goal, priority);
                     incoming_goals.push(uq_goal);
                 }
             }

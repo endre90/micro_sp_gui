@@ -2,9 +2,7 @@
 // and now also contains the main App composer.
 
 use eframe::egui;
-use micro_sp::{ConnectionManager, SPTransform, SPTransformStamped, TransformsManager};
-use poll_promise::Promise;
-use serde::Serialize;
+use micro_sp::{ConnectionManager};
 use std::sync::Arc;
 
 #[derive(PartialEq, Eq, Debug)]

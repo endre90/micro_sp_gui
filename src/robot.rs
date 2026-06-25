@@ -162,7 +162,7 @@ pub struct RobotTab {
     robot_control_promise: Option<Promise<()>>,
     transform_keys: Vec<String>,
     selected_goal_feature_id: Option<String>,
-    tcp_keys: Vec<String>,
+    _tcp_keys: Vec<String>,
     selected_tcp: Option<String>,
     selected_faceplate: Option<String>,
     selected_baseframe: Option<String>,
@@ -210,7 +210,7 @@ impl RobotTab {
             robot_control_promise: None,
             transform_keys: Vec::new(),
             selected_goal_feature_id: None,
-            tcp_keys: Vec::new(),
+            _tcp_keys: Vec::new(),
             selected_tcp: None,
             selected_faceplate: Some("tool0".to_string()),
             selected_baseframe: Some("base_link".to_string()),
@@ -927,6 +927,7 @@ fn draw_relative_pose_inputs(ui: &mut egui::Ui, poses: &mut [f64; 6], id_prefix:
 
 // Should have one for dashboard as well
 pub fn robot_command_tab_to_state(tab: &RobotTab) -> Result<State, String> {
+    let log_target = "micro_sp_gui";
     let robot_name = &tab.robot_id_input;
     let state = State::new();
 
@@ -935,9 +936,9 @@ pub fn robot_command_tab_to_state(tab: &RobotTab) -> Result<State, String> {
     let request_cancel = bv!(&&format!("{}_request_cancel", robot_name));
     // let dashboard_request_trigger = bv!(&&format!("{}_dashboard_request_trigger", robot_name));
 
-    let state = state.add(assign!(request_trigger, tab.command_trigger.to_spvalue()));
-    let state = state.add(assign!(request_cancel, tab.cancel_request.to_spvalue()));
-    let state = state.add(assign!(request_state, "initial".to_spvalue()));
+    let state = state.add(assign!(request_trigger, tab.command_trigger.to_spvalue()), log_target);
+    let state = state.add(assign!(request_cancel, tab.cancel_request.to_spvalue()), log_target);
+    let state = state.add(assign!(request_state, "initial".to_spvalue()), log_target);
     // let state = state.add(assign!(dashboard_request_trigger, false.to_spvalue()));
 
     let command_type = v!(&&format!("{}_command_type", robot_name));
@@ -979,26 +980,26 @@ pub fn robot_command_tab_to_state(tab: &RobotTab) -> Result<State, String> {
     let state = state.add(assign!(
         dashboard_request_trigger,
         tab.dashboard_trigger.to_spvalue()
-    ));
-    let state = state.add(assign!(dashboard_request_state, "initial".to_spvalue()));
+    ), log_target);
+    let state = state.add(assign!(dashboard_request_state, "initial".to_spvalue()),log_target);
     let state = state.add(assign!(
         dashboard_command,
         SPValue::String(StringOrUnknown::String(tab.dashboard_command.clone()))
-    ));
+    ), log_target);
 
     let state = state.add(assign!(
         command_type,
         SPValue::String(StringOrUnknown::String(tab.command_type.to_string()))
-    ));
+    ), log_target);
 
     let state = state.add(assign!(
         accelleration,
         SPValue::Float64(FloatOrUnknown::Float64(OrderedFloat(tab.acceleration)))
-    ));
+    ), log_target);
     let state = state.add(assign!(
         velocity,
         SPValue::Float64(FloatOrUnknown::Float64(OrderedFloat(tab.velocity)))
-    ));
+    ), log_target);
 
     // Is this dashboard?
     // let state = state.add(assign!(
@@ -1012,29 +1013,29 @@ pub fn robot_command_tab_to_state(tab: &RobotTab) -> Result<State, String> {
     let state = state.add(assign!(
         use_execution_time,
         SPValue::Bool(BoolOrUnknown::Bool(tab.use_execution_time))
-    ));
+    ), log_target);
     let state = state.add(assign!(
         execution_time,
         SPValue::Float64(FloatOrUnknown::Float64(OrderedFloat(tab.execution_time_s)))
-    ));
+    ), log_target);
     let state = state.add(assign!(
         use_blend_radius,
         SPValue::Bool(BoolOrUnknown::Bool(tab.use_blend_radius))
-    ));
+    ), log_target);
     let state = state.add(assign!(
         blend_radius,
         SPValue::Float64(FloatOrUnknown::Float64(OrderedFloat(tab.blend_radius)))
-    ));
+    ), log_target);
     let state = state.add(assign!(
         use_joint_positions,
         SPValue::Bool(BoolOrUnknown::Bool(tab.use_joint_positions))
-    ));
+    ), log_target);
     let state = state.add(assign!(
         joint_positions,
         SPValue::Array(ArrayOrUnknown::Array(
             tab.joint_positions.iter().map(|x| x.to_spvalue()).collect()
         ))
-    ));
+    ), log_target);
 
     // Could be good to read this as input and put it in the joint positions eventually
     // let state = state.add(assign!(
@@ -1044,7 +1045,7 @@ pub fn robot_command_tab_to_state(tab: &RobotTab) -> Result<State, String> {
     let state = state.add(assign!(
         use_preferred_joint_config,
         SPValue::Bool(BoolOrUnknown::Bool(tab.use_preferred_joint_config))
-    ));
+    ), log_target);
     let state = state.add(assign!(
         preferred_joint_config,
         SPValue::Array(ArrayOrUnknown::Array(
@@ -1053,11 +1054,11 @@ pub fn robot_command_tab_to_state(tab: &RobotTab) -> Result<State, String> {
                 .map(|x| x.to_spvalue())
                 .collect()
         ))
-    ));
+    ), log_target);
     let state = state.add(assign!(
         use_payload,
         SPValue::Bool(BoolOrUnknown::Bool(tab.use_payload))
-    ));
+    ), log_target);
     let state = state.add(assign!(
         payload,
         SPValue::String(StringOrUnknown::String( match tab.saved_payload {
@@ -1068,14 +1069,14 @@ pub fn robot_command_tab_to_state(tab: &RobotTab) -> Result<State, String> {
             SavedPayload::Sponge => RSP_AND_SPONGE_PAYLOAD.to_string(),
             SavedPayload::None => RSP_ONLY_PAYLOAD.to_string(),
         }))
-    ));
+    ), log_target);
     let mut state = state.clone();
     if tab.command_trigger {
         state = match &tab.selected_baseframe {
             Some(baseframe) => state.add(assign!(
                 baseframe_id,
                 SPValue::String(StringOrUnknown::String(baseframe.to_owned()))
-            )),
+            ), log_target),
             None => {
                 log::error!("Baseframe not selected");
                 return Err(format!("Baseframe not selected"));
@@ -1085,7 +1086,7 @@ pub fn robot_command_tab_to_state(tab: &RobotTab) -> Result<State, String> {
             Some(faceplate) => state.add(assign!(
                 faceplate_id,
                 SPValue::String(StringOrUnknown::String(faceplate.to_owned()))
-            )),
+            ), log_target),
             None => {
                 log::error!("Faceplate not selected");
                 return Err(format!("Faceplate not selected"));
@@ -1095,7 +1096,7 @@ pub fn robot_command_tab_to_state(tab: &RobotTab) -> Result<State, String> {
             Some(goal_feature) => state.add(assign!(
                 goal_feature_id,
                 SPValue::String(StringOrUnknown::String(goal_feature.to_owned()))
-            )),
+            ), log_target),
             None => {
                 log::error!("Goal feature not selected");
                 return Err(format!("Goal feature not selected"));
@@ -1105,7 +1106,7 @@ pub fn robot_command_tab_to_state(tab: &RobotTab) -> Result<State, String> {
             Some(tcp) => state.add(assign!(
                 tcp_id,
                 SPValue::String(StringOrUnknown::String(tcp.to_owned()))
-            )),
+            ), log_target),
             None => {
                 log::error!("Tcp not selected");
                 return Err(format!("Tcp not selected"));
@@ -1116,7 +1117,7 @@ pub fn robot_command_tab_to_state(tab: &RobotTab) -> Result<State, String> {
     let state = state.add(assign!(
         root_frame_id,
         SPValue::String(StringOrUnknown::String("world".to_string()))
-    ));
+    ), log_target);
 
     // Add later, connect to the Stop button. This is the action client and the stop is the dachboard
     // let state = state.add(assign!(
@@ -1131,7 +1132,7 @@ pub fn robot_command_tab_to_state(tab: &RobotTab) -> Result<State, String> {
     let state = state.add(assign!(
         force_threshold,
         SPValue::Float64(FloatOrUnknown::Float64(OrderedFloat(tab.force_threshold)))
-    ));
+    ), log_target);
 
     // Add later as input to see what's happening
     // let state = state.add(assign!(
@@ -1141,13 +1142,13 @@ pub fn robot_command_tab_to_state(tab: &RobotTab) -> Result<State, String> {
     let state = state.add(assign!(
         use_relative_pose,
         SPValue::Bool(BoolOrUnknown::Bool(tab.use_relative_pose))
-    ));
+    ), log_target);
     let state = state.add(assign!(
         relative_pose,
         SPValue::Array(ArrayOrUnknown::Array(
             tab.relative_pose.iter().map(|x| x.to_spvalue()).collect()
         ))
-    ));
+    ), log_target);
 
     Ok(state)
 }
