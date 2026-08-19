@@ -1,0 +1,36 @@
+[package]
+name = "micro_sp_gui_server"
+description = "Serves the micro_sp_gui web frontend and bridges it to Redis."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+# Keep the familiar name: `cargo run -p micro_sp_gui_server` produces `micro_sp_gui`.
+[lib]
+name = "micro_sp_gui_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "micro_sp_gui"
+path = "src/main.rs"
+
+[dependencies]
+micro_sp_gui_protocol.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+log.workspace = true
+
+micro_sp = { git = "ssh://git@github.com/endre90/micro_sp.git", branch = "master" }
+ur_redis_driver = { git = "ssh://git@github.com/sequenceplanner/ur_redis_driver.git", branch = "master" }
+
+# Same version as micro_sp's, so `SPConnection` (a `redis::aio::ConnectionManager`)
+# is the same type here and raw SCAN can be issued on it.
+redis = { version = "0.29.1", features = ["tokio-comp", "connection-manager"] }
+
+axum = { version = "0.8", features = ["ws"] }
+tower-http = { version = "0.6", features = ["fs", "trace"] }
+tokio = { version = "1", features = ["full"] }
+env_logger = "0.11.5"
+regex = "1.12.2"
+chrono = "0.4"
+clap = { version = "4", features = ["derive", "env"] }

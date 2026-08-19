@@ -1,0 +1,17 @@
+[build]
+target = "index.html"
+dist = "dist"
+
+[serve]
+port = 8081
+open = false
+
+# `trunk serve` rebuilds the frontend on save and forwards the API and the push
+# feed to the server, so development needs no CORS handling and no rebuild of the
+# server. In production the server serves ./dist itself and neither proxy is used.
+[[proxy]]
+backend = "http://127.0.0.1:8080/api"
+
+[[proxy]]
+backend = "ws://127.0.0.1:8080/ws"
+ws = true

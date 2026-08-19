@@ -1,0 +1,12 @@
+[package]
+name = "micro_sp_gui_protocol"
+description = "Wire types shared by the micro_sp_gui server and its wasm frontend."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+# Deliberately dependency-light: this crate is compiled to wasm32, so it must not
+# pull in tokio, redis, or micro_sp itself (all of which are native-only).
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
