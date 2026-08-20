@@ -14,6 +14,7 @@ pub mod convert;
 pub mod discovery;
 pub mod logs;
 pub mod poller;
+pub mod robot_poller;
 pub mod status;
 pub mod ws;
 

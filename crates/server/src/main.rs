@@ -21,7 +21,8 @@ use clap::Parser;
 use micro_sp::ConnectionManager;
 use micro_sp_gui_protocol as proto;
 use micro_sp_gui_server::{
-    AppState, Config, LOG_TARGET, api_goals, api_robot, api_state, api_transforms, logs, poller, ws,
+    AppState, Config, LOG_TARGET, api_goals, api_robot, api_state, api_transforms, logs, poller,
+    robot_poller, ws,
 };
 use std::sync::Arc;
 use tower_http::services::{ServeDir, ServeFile};
@@ -54,6 +55,8 @@ async fn main() {
     let state = AppState::new(cm, cfg.clone());
 
     tokio::spawn(poller::run(state.clone()));
+    // A second, much cheaper loop for the robot keys alone; see `robot_poller`.
+    tokio::spawn(robot_poller::run(state.clone()));
     tokio::spawn(logs::run(state.clone()));
 
     let index = cfg.dist.join("index.html");

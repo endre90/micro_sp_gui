@@ -17,9 +17,14 @@ its types.
 So the binary holds the one `ConnectionManager`, and the frontend talks to it:
 
 ```
-browser (egui/wasm) ──── /ws     push feed ────► one poller ────► Redis
+browser (egui/wasm) ──── /ws     push feed ────► two pollers ───► Redis
                     └─── /api/*  POSTs     ────► StateManager / TransformsManager
 ```
+
+Two pollers, because they are not the same shape of read. One scans the whole keyspace every
+`--poll-ms`; the other `MGET`s only the robot's ~21 variables every `--robot-poll-ms`, so the Robot
+tab can keep up with a driver that republishes every 5 ms without paying for a full scan twenty
+times a second.
 
 Reads are pushed over a websocket; writes are plain `POST`s. `crates/protocol` mirrors `SPValue`'s
 serde representation exactly, so a value deserialises straight out of Redis and back again with no
@@ -75,6 +80,7 @@ environment variable:
 | `--bind` | `MICRO_SP_GUI_BIND` | `0.0.0.0:8080` | where to serve |
 | `--dist` | `MICRO_SP_GUI_DIST` | `dist` | the built frontend |
 | `--poll-ms` | `MICRO_SP_GUI_POLL_MS` | `250` | Redis poll period — one poller serves every browser |
+| `--robot-poll-ms` | `MICRO_SP_GUI_ROBOT_POLL_MS` | `50` | how often to re-read the robot's own variables — one small `MGET`, no keyspace scan |
 | `--log-dir` | `MICRO_SP_ACTIVITY_LOG_DIR` | — | where micro_sp writes its activity log |
 | `--log-stem` | `MICRO_SP_GUI_LOG_STEM` | `micro_sp` | log file base name |
 | `--log-ring` | `MICRO_SP_GUI_LOG_RING` | `20000` | lines kept for backfill |
@@ -95,7 +101,11 @@ rather than silently dropped, which is what `micro_sp`'s own `build_state` does 
 
 **Robot** — builds a `ur_redis_driver` request and shows what the driver publishes back:
 `safety_mode`, `robot_mode`, connection lights, joint states, TCP pose, and the
-`request_state` → `request_result` / `request_feedback` chain with the fail counters. All 19 URScript
+`request_state` → `request_result` / `request_feedback` chain with the fail counters.
+A connection light has three states, not two: grey means nothing has written the variable at all,
+which is a different fault from the driver reporting that it is disconnected — a driver older than
+`v0.1.1` never writes them, and painting that red sends you hunting for a network problem that does
+not exist. All 19 URScript
 templates and all 24 dashboard commands are available. A cancelled goal is shown as cancelled, not
 failed — the driver terminates it as `succeeded` with result `cancelled`.
 
@@ -107,7 +117,11 @@ the layout `load_transforms_from_path` reads.
 
 **Logs** — micro_sp no longer publishes log blobs to Redis; the `{sp_id}_logger_*` keys are gone. The
 server tails the on-disk activity log instead (rotation-aware) and the tab filters it by kind
-(operations / transitions / SOPs / variables), by source, and by grep or regex. Alongside it, the
+(operations / transitions / SOPs / variables), by source, and by grep or regex. Timestamps are shown
+in *your* timezone: micro_sp writes records with `chrono::Local` and no offset on them, so a runner
+in a container with no `TZ` logs UTC while one on the host logs local time. The file's banner is the
+only line that records which, so the server resolves every record against it and the browser renders
+the instant — hover a timestamp to see what the file literally says. Alongside it, the
 live *information* pane shows the current value of every `_information` variable — what each runner,
 operation and SOP is saying right now — which needs no extra Redis traffic because it is already in
 the state feed.
@@ -122,7 +136,7 @@ Redis.
 ## Tests
 
 ```bash
-cargo test --workspace          # 31 tests, no Redis needed
+cargo test --workspace          # 39 tests, no Redis needed
 cargo clippy --workspace --all-targets
 cargo check -p micro_sp_gui_web --target wasm32-unknown-unknown --lib
 ```

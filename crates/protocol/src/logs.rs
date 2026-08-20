@@ -70,7 +70,18 @@ pub struct LogLine {
     /// Monotonic within one server run; the frontend dedupes and orders on it.
     pub seq: u64,
     /// `%Y-%m-%d %H:%M:%S%.3f`, exactly as written.
+    ///
+    /// Note that this carries **no timezone**: micro_sp formats it with
+    /// `chrono::Local`, so a runner in a container with no `TZ` writes UTC and a
+    /// runner on the host writes local time, and the two are indistinguishable
+    /// here. Use `at_utc_ms` to render an instant; keep this for grep and for
+    /// showing what the file literally says.
     pub at: String,
+    /// `at` resolved to milliseconds since the Unix epoch, using the UTC offset
+    /// the file's banner records. `None` when the banner was not seen or the
+    /// timestamp did not parse, in which case only `at` is meaningful.
+    #[serde(default)]
+    pub at_utc_ms: Option<i64>,
     pub kind: LogKind,
     /// The runner that emitted it, e.g. `sp_operation_runner`.
     pub source: String,

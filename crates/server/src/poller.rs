@@ -164,10 +164,10 @@ pub async fn run(state: Arc<AppState>) {
             state.cfg.robot_id.as_deref(),
         );
 
-        let robots: BTreeMap<String, proto::RobotStatus> = robot_ids
-            .iter()
-            .map(|id| (id.clone(), status::robot_status(&entries, id)))
-            .collect();
+        // Robot status is *not* derived here: `robot_poller` owns it, on a much
+        // shorter period. Computing it in both loops would leave this one
+        // overwriting the fresh values with quarter-second-old ones, and the two
+        // would republish against each other forever.
         let goals: BTreeMap<String, proto::GoalsStatus> = sp_ids
             .iter()
             .map(|id| (id.clone(), status::goals_status(&entries, id)))
@@ -211,13 +211,6 @@ pub async fn run(state: Arc<AppState>) {
                 messages.push(proto::ServerMsg::Transforms(transforms.clone()));
                 snap.transforms = transforms;
             }
-
-            for (id, status) in &robots {
-                if snap.robots.get(id) != Some(status) {
-                    messages.push(proto::ServerMsg::RobotStatus(status.clone()));
-                }
-            }
-            snap.robots = robots;
 
             for (id, status) in &goals {
                 if snap.goals.get(id) != Some(status) {

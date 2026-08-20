@@ -31,6 +31,9 @@ egui_extras = { version = "0.32" }
 ewebsock = "0.8"
 ehttp = "0.5"
 regex = "1.12.2"
+# Default features include `wasmbind`, so `Local` is the *browser's* timezone
+# under wasm and the OS one in the native dev shell - one code path for both.
+chrono = "0.4"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # The native dev shell needs winit's Linux backends, which live in eframe's

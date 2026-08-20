@@ -19,10 +19,22 @@ pub const BAD: egui::Color32 = egui::Color32::from_rgb(0xe5, 0x39, 0x35);
 pub const UNKNOWN: egui::Color32 = egui::Color32::from_rgb(0x90, 0x90, 0x90);
 
 /// A small round status light with a tooltip.
-pub fn light(ui: &mut egui::Ui, on: bool, label: &str, hover: &str) {
-    let colour = if on { OK } else { BAD };
-    ui.label(egui::RichText::new("⏺").color(colour)).on_hover_text(hover);
-    ui.label(label).on_hover_text(hover);
+///
+/// `None` is grey, not red: "nobody has published this" and "the publisher says
+/// no" are different facts, and painting the first as the second sent us
+/// hunting for a disconnected robot that had simply never been described.
+pub fn light(ui: &mut egui::Ui, on: Option<bool>, label: &str, hover: &str) {
+    let colour = match on {
+        Some(true) => OK,
+        Some(false) => BAD,
+        None => UNKNOWN,
+    };
+    let hover = match on {
+        Some(value) => format!("{hover}\n\nCurrently {value}."),
+        None => format!("{hover}\n\nNot published: no process has written this variable."),
+    };
+    ui.label(egui::RichText::new("⏺").color(colour)).on_hover_text(&hover);
+    ui.label(label).on_hover_text(&hover);
 }
 
 /// A labelled read-only value.

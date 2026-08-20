@@ -296,6 +296,33 @@ fn information_row(ui: &mut egui::Ui, key: &str, value: &str) {
     });
 }
 
+/// The timestamp to show, and what the file itself says if the two differ.
+///
+/// micro_sp writes records with `chrono::Local` and no offset on them, so the
+/// same file reads two hours early when the runner was in a UTC container and
+/// the operator is not. The server resolves each record against the offset in
+/// the file's banner, leaving only the rendering to do here - in the *viewer's*
+/// timezone, which is the browser's under wasm.
+fn timestamp(line: &proto::LogLine) -> (String, Option<String>) {
+    match line.at_utc_ms.and_then(chrono::DateTime::from_timestamp_millis) {
+        Some(instant) => {
+            let local = instant
+                .with_timezone(&chrono::Local)
+                .format("%Y-%m-%d %H:%M:%S%.3f")
+                .to_string();
+            let source = (local != line.at).then(|| {
+                format!(
+                    "Shown in your timezone.\nThe file says {}, on the clock micro_sp ran on.",
+                    line.at
+                )
+            });
+            (local, source)
+        }
+        // No banner in the file, so there is nothing to resolve it against.
+        None => (line.at.clone(), None),
+    }
+}
+
 fn kind_colour(kind: proto::LogKind) -> egui::Color32 {
     match kind {
         proto::LogKind::Operation => egui::Color32::from_rgb(0x64, 0xb5, 0xf6),
@@ -319,7 +346,11 @@ fn log_row(ui: &mut egui::Ui, line: &proto::LogLine) {
             return;
         }
 
-        ui.label(egui::RichText::new(&line.at).monospace().weak());
+        let (at, source) = timestamp(line);
+        let stamp = ui.label(egui::RichText::new(at).monospace().weak());
+        if let Some(source) = source {
+            stamp.on_hover_text(source);
+        }
         ui.label(
             egui::RichText::new(format!("{:<5}", line.kind.tag()))
                 .monospace()

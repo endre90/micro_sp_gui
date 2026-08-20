@@ -26,6 +26,14 @@ pub struct Config {
     #[arg(long, env = "MICRO_SP_GUI_POLL_MS", default_value_t = 250)]
     pub poll_ms: u64,
 
+    /// How often to re-read just the robot's own variables, in milliseconds.
+    /// A separate, much cheaper loop than `--poll-ms`: one `MGET` of the ~21
+    /// keys the Robot tab shows, with no keyspace scan and no transform read.
+    /// The driver republishes every 5 ms, so this is what decides how live the
+    /// joint states and TCP pose look.
+    #[arg(long, env = "MICRO_SP_GUI_ROBOT_POLL_MS", default_value_t = 50)]
+    pub robot_poll_ms: u64,
+
     /// Where micro_sp writes its activity log. Defaults to the same variable
     /// micro_sp itself reads, so setting it once covers both.
     #[arg(long, env = "MICRO_SP_ACTIVITY_LOG_DIR")]

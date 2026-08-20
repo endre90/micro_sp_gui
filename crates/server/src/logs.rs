@@ -14,8 +14,16 @@
 //! Columns are space-padded to fixed minimum widths and separated by `" | "`.
 //! Only `detail` is free-form, so splitting into five fields and keeping the
 //! remainder as the detail is safe even when the detail itself contains a pipe.
+//!
+//! **The records carry no timezone.** micro_sp formats them with
+//! `chrono::Local`, so a runner in a container with no `TZ` writes UTC and one
+//! on the host writes local time - and the file gives no hint which. The banner
+//! does: it is the only line with a `%:z` offset on it. Parsing that and
+//! resolving each record against it is what stops a dockerised runner's log from
+//! reading two hours early in the browser.
 
 use crate::{AppState, LOG_TARGET};
+use chrono::{DateTime, FixedOffset, NaiveDateTime};
 use micro_sp_gui_protocol as proto;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -28,14 +36,56 @@ const TAIL_INTERVAL_MS: u64 = 200;
 /// How much of the active file to read back at startup.
 const BACKFILL_BYTES: u64 = 2 * 1024 * 1024;
 
+/// How much of the *head* of a file to read looking for its banner. The banner
+/// is the first line, so this only has to be comfortably longer than one.
+const BANNER_BYTES: u64 = 512;
+
+/// The format micro_sp writes a record's timestamp in, with no offset on it.
+const RECORD_FORMAT: &str = "%Y-%m-%d %H:%M:%S%.3f";
+
 static SEQ: AtomicU64 = AtomicU64::new(0);
 
 fn next_seq() -> u64 {
     SEQ.fetch_add(1, Ordering::Relaxed)
 }
 
+/// The UTC offset out of the banner micro_sp writes when it opens a file:
+///
+/// ```text
+/// # micro_sp activity log - opened 2026-08-20 07:27:54.979 +00:00
+/// ```
+///
+/// `None` for every other line, including the other `#` ones.
+pub fn parse_banner_offset(raw: &str) -> Option<FixedOffset> {
+    let rest = raw.trim().strip_prefix("# micro_sp activity log - opened ")?;
+    DateTime::parse_from_str(rest.trim(), "%Y-%m-%d %H:%M:%S%.3f %:z")
+        .ok()
+        .map(|dt| *dt.offset())
+}
+
+/// A record's timestamp as milliseconds since the epoch, read against the offset
+/// its file was opened with.
+fn to_utc_ms(at: &str, offset: Option<FixedOffset>) -> Option<i64> {
+    let offset = offset?;
+    let naive = NaiveDateTime::parse_from_str(at, RECORD_FORMAT).ok()?;
+    // `single()` rather than `unwrap`: a local time inside a DST fold is
+    // ambiguous, and a fixed offset never is - but the type does not know that.
+    naive.and_local_timezone(offset).single().map(|dt| dt.timestamp_millis())
+}
+
+/// The head of `path`, far enough in to contain the banner.
+async fn banner_offset(path: &Path) -> Option<FixedOffset> {
+    let file = tokio::fs::File::open(path).await.ok()?;
+    let mut buf = Vec::new();
+    file.take(BANNER_BYTES).read_to_end(&mut buf).await.ok()?;
+    String::from_utf8_lossy(&buf).lines().find_map(parse_banner_offset)
+}
+
 /// Parse one line. `None` for blanks and the `#` banner.
-pub fn parse_line(raw: &str) -> Option<proto::LogLine> {
+///
+/// `offset` is whatever the file's banner said; it only fills `at_utc_ms`, so
+/// `None` degrades to exactly the behaviour before offsets were read at all.
+pub fn parse_line(raw: &str, offset: Option<FixedOffset>) -> Option<proto::LogLine> {
     let trimmed = raw.trim_end_matches(['\r', '\n']);
     if trimmed.trim().is_empty() || trimmed.starts_with('#') {
         return None;
@@ -49,6 +99,7 @@ pub fn parse_line(raw: &str) -> Option<proto::LogLine> {
         return Some(proto::LogLine {
             seq: next_seq(),
             at: String::new(),
+            at_utc_ms: None,
             kind: proto::LogKind::Other,
             source: String::new(),
             subject: String::new(),
@@ -57,9 +108,11 @@ pub fn parse_line(raw: &str) -> Option<proto::LogLine> {
         });
     }
 
+    let at = fields[0].trim().to_string();
     Some(proto::LogLine {
         seq: next_seq(),
-        at: fields[0].trim().to_string(),
+        at_utc_ms: to_utc_ms(&at, offset),
+        at,
         kind: proto::LogKind::from_tag(fields[1]),
         source: fields[2].trim_end().to_string(),
         subject: fields[3].trim_end().to_string(),
@@ -68,8 +121,22 @@ pub fn parse_line(raw: &str) -> Option<proto::LogLine> {
     })
 }
 
-fn parse_chunk(chunk: &str) -> Vec<proto::LogLine> {
-    chunk.lines().filter_map(parse_line).collect()
+/// Parse a chunk, picking the offset up from any banner inside it.
+///
+/// A rotation puts the tail of the old file and the head of the new one in the
+/// same chunk, and the new one's banner sits between them - so the offset has to
+/// be able to change mid-chunk rather than being decided up front.
+fn parse_chunk(chunk: &str, offset: &mut Option<FixedOffset>) -> Vec<proto::LogLine> {
+    let mut lines = Vec::new();
+    for raw in chunk.lines() {
+        if let Some(found) = parse_banner_offset(raw) {
+            *offset = Some(found);
+        }
+        if let Some(line) = parse_line(raw, *offset) {
+            lines.push(line);
+        }
+    }
+    lines
 }
 
 /// Rotated files, oldest first.
@@ -120,12 +187,15 @@ struct Tailer {
     inode: Option<u64>,
     /// A trailing line that had not been terminated yet when we last read.
     partial: String,
+    /// The UTC offset the current file's banner records, i.e. the clock its
+    /// records were written against. `None` until a banner has been seen.
+    tz: Option<FixedOffset>,
 }
 
 impl Tailer {
     fn new(dir: PathBuf, stem: String) -> Self {
         let active = dir.join(format!("{stem}.log"));
-        Self { dir, stem, active, offset: 0, inode: None, partial: String::new() }
+        Self { dir, stem, active, offset: 0, inode: None, partial: String::new(), tz: None }
     }
 
     async fn inode_of(path: &Path) -> Option<u64> {
@@ -150,6 +220,17 @@ impl Tailer {
         let len = meta.len();
         let from = len.saturating_sub(BACKFILL_BYTES);
         self.inode = Self::inode_of(&self.active).await;
+        // The backfill starts at the *end* of the file, so it will not see the
+        // banner; read the head separately for it.
+        self.tz = banner_offset(&self.active).await;
+        if self.tz.is_none() {
+            log::warn!(
+                target: LOG_TARGET,
+                "{} has no readable banner; log timestamps will be shown exactly as written, \
+                 which is wrong if micro_sp ran in a different timezone than the viewer.",
+                self.active.display()
+            );
+        }
         match read_from(&self.active, from).await {
             Ok((text, new_offset)) => {
                 self.offset = new_offset;
@@ -162,7 +243,10 @@ impl Tailer {
                 } else {
                     &text[..]
                 };
-                parse_chunk(text)
+                let mut tz = self.tz;
+                let lines = parse_chunk(text, &mut tz);
+                self.tz = tz;
+                lines
             }
             Err(e) => {
                 log::warn!(target: LOG_TARGET, "Could not backfill {}: {e}", self.active.display());
@@ -231,7 +315,10 @@ impl Tailer {
                 return Vec::new();
             }
         }
-        parse_chunk(&text)
+        let mut tz = self.tz;
+        let lines = parse_chunk(&text, &mut tz);
+        self.tz = tz;
+        lines
     }
 }
 
@@ -280,7 +367,7 @@ mod tests {
 
     #[test]
     fn skips_the_banner_and_parses_every_kind() {
-        let lines = parse_chunk(SAMPLE);
+        let lines = parse_chunk(SAMPLE, &mut None);
         assert_eq!(lines.len(), 4, "the three '#' lines must not become records");
         assert_eq!(lines[0].kind, proto::LogKind::Operation);
         assert_eq!(lines[0].at, "2026-08-19 09:00:01.120");
@@ -298,6 +385,7 @@ mod tests {
     fn a_pipe_inside_the_detail_stays_in_the_detail() {
         let line = parse_line(
             "2026-08-19 09:00:02.000 | VAR   | sp_op_runner               | note                               | UNKNOWN -> a | b | c",
+            None,
         )
         .expect("parses");
         assert_eq!(line.kind, proto::LogKind::Variable);
@@ -310,29 +398,107 @@ mod tests {
     fn an_overlong_column_still_parses() {
         let long = "a_very_long_operation_name_that_exceeds_the_column_width";
         let raw = format!("2026-08-19 09:00:03.000 | OP    | src | {long} | initial -> executing");
-        let line = parse_line(&raw).expect("parses");
+        let line = parse_line(&raw, None).expect("parses");
         assert_eq!(line.subject, long);
         assert_eq!(line.source, "src");
     }
 
     #[test]
     fn an_unrecognised_line_is_kept_as_other() {
-        let line = parse_line("thread 'main' panicked at src/lib.rs:1:1").expect("kept");
+        let line = parse_line("thread 'main' panicked at src/lib.rs:1:1", None).expect("kept");
         assert_eq!(line.kind, proto::LogKind::Other);
         assert_eq!(line.detail, "thread 'main' panicked at src/lib.rs:1:1");
     }
 
     #[test]
     fn blank_and_banner_lines_are_dropped() {
-        assert!(parse_line("").is_none());
-        assert!(parse_line("   ").is_none());
-        assert!(parse_line("# columns: a | b").is_none());
+        assert!(parse_line("", None).is_none());
+        assert!(parse_line("   ", None).is_none());
+        assert!(parse_line("# columns: a | b", None).is_none());
+    }
+
+    /// The whole point of reading the banner: the same wall-clock string means
+    /// two different instants depending on the clock the writer was on, and only
+    /// the banner says which.
+    #[test]
+    fn the_banner_offset_decides_what_instant_a_record_is() {
+        let stockholm = parse_banner_offset(
+            "# micro_sp activity log - opened 2026-08-20 09:05:10.728 +02:00",
+        )
+        .expect("an offset");
+        let utc = parse_banner_offset(
+            "# micro_sp activity log - opened 2026-08-20 07:27:54.979 +00:00",
+        )
+        .expect("an offset");
+        assert_eq!(stockholm.local_minus_utc(), 2 * 3600);
+        assert_eq!(utc.local_minus_utc(), 0);
+
+        // Both files say "07:27:54.979", and they are two hours apart.
+        let at = "2026-08-20 07:27:54.979";
+        let in_utc = to_utc_ms(at, Some(utc)).expect("resolves");
+        let in_stockholm = to_utc_ms(at, Some(stockholm)).expect("resolves");
+        assert_eq!(in_utc - in_stockholm, 2 * 3600 * 1000);
+    }
+
+    #[test]
+    fn the_other_banner_lines_carry_no_offset() {
+        assert!(
+            parse_banner_offset("# columns: timestamp | kind | source | subject | detail")
+                .is_none()
+        );
+        assert!(parse_banner_offset("#").is_none());
+        assert!(parse_banner_offset("2026-08-19 09:00:01.120 | OP | a | b | c").is_none());
+    }
+
+    /// Without a banner the timestamp is still shown, just not relocated - which
+    /// is exactly what happened before any of this existed.
+    #[test]
+    fn no_banner_means_no_instant_but_still_a_line() {
+        let line = parse_line(
+            "2026-08-19 09:00:01.120 | OP    | sp_operation_runner        | op_move                            | initial -> executing",
+            None,
+        )
+        .expect("parses");
+        assert_eq!(line.at, "2026-08-19 09:00:01.120");
+        assert_eq!(line.at_utc_ms, None);
+    }
+
+    /// The sample's own banner is `+02:00`, and `parse_chunk` has to pick it up
+    /// on the way past rather than being told about it.
+    #[test]
+    fn a_chunk_learns_its_offset_from_its_own_banner() {
+        let lines = parse_chunk(SAMPLE, &mut None);
+        let at_utc_ms = lines[0].at_utc_ms.expect("the banner was read");
+        // 2026-08-19 09:00:01.120 +02:00 is 07:00:01.120 UTC.
+        let expected = chrono::DateTime::parse_from_rfc3339("2026-08-19T09:00:01.120+02:00")
+            .unwrap()
+            .timestamp_millis();
+        assert_eq!(at_utc_ms, expected);
+    }
+
+    /// A rotation puts two files' worth of text in one chunk. The lines before
+    /// the new banner belong to the old file's clock, the ones after to the new
+    /// one's.
+    #[test]
+    fn a_banner_mid_chunk_switches_the_offset_from_there_on() {
+        let chunk = concat!(
+            "2026-08-20 09:00:00.000 | OP    | r | a | before\n",
+            "# micro_sp activity log - opened 2026-08-20 07:00:00.000 +00:00\n",
+            "2026-08-20 09:00:00.000 | OP    | r | a | after\n",
+        );
+        let mut tz = chrono::FixedOffset::east_opt(2 * 3600);
+        let lines = parse_chunk(chunk, &mut tz);
+        assert_eq!(lines.len(), 2, "the banner is not a record");
+        let before = lines[0].at_utc_ms.expect("resolves");
+        let after = lines[1].at_utc_ms.expect("resolves");
+        assert_eq!(after - before, 2 * 3600 * 1000);
+        assert_eq!(tz, chrono::FixedOffset::east_opt(0));
     }
 
     #[test]
     fn sequence_numbers_increase() {
-        let a = parse_line("x | y | z | w | v").unwrap();
-        let b = parse_line("x | y | z | w | v").unwrap();
+        let a = parse_line("x | y | z | w | v", None).unwrap();
+        let b = parse_line("x | y | z | w | v", None).unwrap();
         assert!(b.seq > a.seq);
     }
 }

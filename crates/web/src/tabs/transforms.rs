@@ -79,11 +79,18 @@ impl TransformsTab {
             .show_inside(ui, |ui| self.tree_panel(ui, api));
 
         egui::ScrollArea::vertical().show(ui, |ui| {
-            self.frame_panel(ui, api);
-            ui.separator();
-            self.lookup_panel(ui, api);
-            ui.separator();
-            self.export_panel(ui, api);
+            // The `Ui` left over after a `SidePanel` carries no margin of its
+            // own, so without this the content sits flush against the tree's
+            // separator. `Margin::symmetric(8, 2)` is what `Frame::side_top_panel`
+            // gives the panel on the other side of that line, and what makes the
+            // Logs tab look right.
+            egui::Frame::new().inner_margin(egui::Margin::symmetric(8, 2)).show(ui, |ui| {
+                self.frame_panel(ui, api);
+                ui.separator();
+                self.lookup_panel(ui, api);
+                ui.separator();
+                self.export_panel(ui, api);
+            });
         });
     }
 

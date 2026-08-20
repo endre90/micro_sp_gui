@@ -255,8 +255,12 @@ pub struct RobotStatus {
     /// driver's own scripts.
     pub program_state: String,
     pub program_running: bool,
-    pub robot_connected: bool,
-    pub dashboard_connected: bool,
+    /// `None` when nothing has published the key at all - which is not the same
+    /// thing as the driver reporting `false`, and must not be drawn as if it
+    /// were. An older `ur_redis_driver` never writes it.
+    pub robot_connected: Option<bool>,
+    /// `None` when unpublished; see [`RobotStatus::robot_connected`].
+    pub dashboard_connected: Option<bool>,
     pub remote_control: bool,
     pub tcp_pose: Vec<f64>,
     pub tcp_force: Vec<f64>,
