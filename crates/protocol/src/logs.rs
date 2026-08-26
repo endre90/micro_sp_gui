@@ -4,6 +4,13 @@
 //! `{sp_id}_logger_*` keys are gone). It writes a rotating text file instead,
 //! opt-in via `MICRO_SP_ACTIVITY_LOG_DIR`. The server tails that file and
 //! parses each line back into a `LogLine`; see `crates/server/src/logs.rs`.
+//!
+//! Since micro_sp v0.5.0 that file carries two families of line in the same
+//! kind column: the structured events saying *what* happened (`OP`, `TRANS`,
+//! `SOP`, `VAR`) and the console log lines saying *why* (`ERR`, `WARN`, `INFO`,
+//! `DEBUG`, `TRACE`), which the logger `initialize_env_logger` installs mirrors
+//! into the file as it prints them. They are the same shape - one tag, one
+//! source, one subject, one detail - so one filter, and one grep, sees both.
 
 use serde::{Deserialize, Serialize};
 
@@ -19,6 +26,16 @@ pub enum LogKind {
     Sop,
     /// `VAR` - one variable took a new value.
     Variable,
+    /// `ERR` - a console `log::error!`, mirrored into the file.
+    Error,
+    /// `WARN` - a console `log::warn!`.
+    Warn,
+    /// `INFO` - a console `log::info!`.
+    Info,
+    /// `DEBUG` - a console `log::debug!`.
+    Debug,
+    /// `TRACE` - a console `log::trace!`.
+    Trace,
     /// A line that did not carry a recognised tag.
     Other,
 }
@@ -29,16 +46,43 @@ impl LogKind {
         LogKind::Transition,
         LogKind::Sop,
         LogKind::Variable,
+        LogKind::Error,
+        LogKind::Warn,
+        LogKind::Info,
+        LogKind::Debug,
+        LogKind::Trace,
         LogKind::Other,
     ];
 
+    /// The structured events: something the system did.
+    pub const EVENTS: &'static [LogKind] = &[
+        LogKind::Operation,
+        LogKind::Transition,
+        LogKind::Sop,
+        LogKind::Variable,
+    ];
+
+    /// The mirrored console lines, most severe first.
+    pub const LEVELS: &'static [LogKind] =
+        &[LogKind::Error, LogKind::Warn, LogKind::Info, LogKind::Debug, LogKind::Trace];
+
     /// The tag as it appears in the file.
+    ///
+    /// micro_sp pads this column to five characters, and writes `ERR` rather
+    /// than `ERROR` so every tag fits it. Keep these byte-for-byte identical to
+    /// `micro_sp::activity_log::ActivityKind::tag`, or a grep that works on the
+    /// file stops working in the GUI.
     pub fn tag(&self) -> &'static str {
         match self {
             LogKind::Operation => "OP",
             LogKind::Transition => "TRANS",
             LogKind::Sop => "SOP",
             LogKind::Variable => "VAR",
+            LogKind::Error => "ERR",
+            LogKind::Warn => "WARN",
+            LogKind::Info => "INFO",
+            LogKind::Debug => "DEBUG",
+            LogKind::Trace => "TRACE",
             LogKind::Other => "-",
         }
     }
@@ -50,8 +94,23 @@ impl LogKind {
             LogKind::Transition => "Transitions",
             LogKind::Sop => "SOPs",
             LogKind::Variable => "Variables",
+            LogKind::Error => "ERR",
+            LogKind::Warn => "WARN",
+            LogKind::Info => "INFO",
+            LogKind::Debug => "DEBUG",
+            LogKind::Trace => "TRACE",
             LogKind::Other => "Other",
         }
+    }
+
+    /// Whether this is a mirrored console line rather than a structured event.
+    /// Their columns mean different things - `subject` is a `file:line` rather
+    /// than a name - so the two are rendered a little differently.
+    pub fn is_console(&self) -> bool {
+        matches!(
+            self,
+            LogKind::Error | LogKind::Warn | LogKind::Info | LogKind::Debug | LogKind::Trace
+        )
     }
 
     pub fn from_tag(tag: &str) -> LogKind {
@@ -60,6 +119,13 @@ impl LogKind {
             "TRANS" => LogKind::Transition,
             "SOP" => LogKind::Sop,
             "VAR" => LogKind::Variable,
+            // The long spellings are not what micro_sp writes, but a hand-edited
+            // or third-party line is cheap to accept.
+            "ERR" | "ERROR" => LogKind::Error,
+            "WARN" | "WARNING" => LogKind::Warn,
+            "INFO" => LogKind::Info,
+            "DEBUG" => LogKind::Debug,
+            "TRACE" => LogKind::Trace,
             _ => LogKind::Other,
         }
     }
@@ -83,11 +149,14 @@ pub struct LogLine {
     #[serde(default)]
     pub at_utc_ms: Option<i64>,
     pub kind: LogKind,
-    /// The runner that emitted it, e.g. `sp_operation_runner`.
+    /// The runner that emitted it, e.g. `sp_operation_runner`. For a console
+    /// line this is the `log` target, which is the same string.
     pub source: String,
-    /// The operation, transition, SOP or variable name.
+    /// The operation, transition, SOP or variable name - or, for a console
+    /// line, the `file:line` the statement was written at.
     pub subject: String,
-    /// `from -> to`, `old -> new`, `taken as '<id>'`, ...
+    /// `from -> to`, `old -> new`, `taken as '<id>'`, ... - or, for a console
+    /// line, the message itself.
     pub detail: String,
     /// The unparsed line, for grep and for lines that did not fit the format.
     pub raw: String,

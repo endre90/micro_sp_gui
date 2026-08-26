@@ -117,7 +117,10 @@ the layout `load_transforms_from_path` reads.
 
 **Logs** — micro_sp no longer publishes log blobs to Redis; the `{sp_id}_logger_*` keys are gone. The
 server tails the on-disk activity log instead (rotation-aware) and the tab filters it by kind
-(operations / transitions / SOPs / variables), by source, and by grep or regex. Timestamps are shown
+(operations / transitions / SOPs / variables, plus `ERR` / `WARN` / `INFO` / `DEBUG` / `TRACE`), by
+source, and by grep or regex. Since micro_sp v0.5.0 the console log is mirrored into the same file,
+so what the runners *printed* and what they *did* are rows of one table, tagged the same way the
+file tags them — a grep that works here works on the file. Timestamps are shown
 in *your* timezone: micro_sp writes records with `chrono::Local` and no offset on them, so a runner
 in a container with no `TZ` logs UTC while one on the host logs local time. The file's banner is the
 only line that records which, so the server resolves every record against it and the browser renders

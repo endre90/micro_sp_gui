@@ -9,11 +9,19 @@
 //! # micro_sp activity log - opened 2026-08-19 09:00:00.000 +02:00
 //! # columns: timestamp | kind | source | subject | detail
 //! 2026-08-19 09:00:01.120 | OP    | sp_operation_runner        | op_move                            | initial -> executing  (Starting)
+//! 2026-08-19 09:00:01.121 | INFO  | sp_operation_runner        | operation.rs:214                   | Operation op_move is executing.
 //! ```
 //!
 //! Columns are space-padded to fixed minimum widths and separated by `" | "`.
 //! Only `detail` is free-form, so splitting into five fields and keeping the
 //! remainder as the detail is safe even when the detail itself contains a pipe.
+//!
+//! Since v0.5.0 the kind column carries the console log as well: the logger
+//! `initialize_env_logger` installs mirrors everything it prints into the file
+//! tagged `ERR`/`WARN`/`INFO`/`DEBUG`/`TRACE`, with the `log` target in the
+//! source column, the statement's `file:line` in the subject column and the
+//! message as the detail. That needs no parsing changes at all - it is the same
+//! five columns - only a tag the frontend knows how to name and colour.
 //!
 //! **The records carry no timezone.** micro_sp formats them with
 //! `chrono::Local`, so a runner in a container with no `TZ` writes UTC and one
@@ -363,12 +371,17 @@ mod tests {
         "2026-08-19 09:00:01.125 | TRANS | sp_auto_transition_runner  | t_tick                             | taken as 'aB3dE5fG7h'\n",
         "2026-08-19 09:00:01.130 | SOP   | sp_sop_runner              | sop_1                              | executing -> completed\n",
         "2026-08-19 09:00:01.140 | VAR   | sp_operation_runner        | r1_command_type                    | UNKNOWN -> unsafe_move_j\n",
+        "2026-08-19 09:00:01.150 | ERR   | sp_operation_runner        | operation.rs:214                   | Operation op_move failed to start.\n",
+        "2026-08-19 09:00:01.160 | WARN  | sp_ticker_runner           | ticker.rs:88                       | Tick took 210ms.\n",
+        "2026-08-19 09:00:01.170 | INFO  | sp_goal_runner             | goal.rs:31                         | Goal accepted.\n",
+        "2026-08-19 09:00:01.180 | DEBUG | sp_auto_transition_runner  | transition.rs:12                   | Evaluated 14 guards.\n",
+        "2026-08-19 09:00:01.190 | TRACE | sp_operation_runner        | operation.rs:9                      | Entering process_operation.\n",
     );
 
     #[test]
     fn skips_the_banner_and_parses_every_kind() {
         let lines = parse_chunk(SAMPLE, &mut None);
-        assert_eq!(lines.len(), 4, "the three '#' lines must not become records");
+        assert_eq!(lines.len(), 9, "the three '#' lines must not become records");
         assert_eq!(lines[0].kind, proto::LogKind::Operation);
         assert_eq!(lines[0].at, "2026-08-19 09:00:01.120");
         assert_eq!(lines[0].source, "sp_operation_runner");
@@ -378,6 +391,50 @@ mod tests {
         assert_eq!(lines[2].kind, proto::LogKind::Sop);
         assert_eq!(lines[3].kind, proto::LogKind::Variable);
         assert_eq!(lines[3].subject, "r1_command_type");
+    }
+
+    /// The mirrored console lines share the five columns with the events, so
+    /// they need no parsing of their own - but their tags have to survive the
+    /// round trip, or the Logs tab shows them all as `Other`.
+    #[test]
+    fn the_console_levels_get_their_own_kinds() {
+        let lines = parse_chunk(SAMPLE, &mut None);
+        let levels: Vec<proto::LogKind> = lines[4..].iter().map(|l| l.kind).collect();
+        assert_eq!(
+            levels,
+            vec![
+                proto::LogKind::Error,
+                proto::LogKind::Warn,
+                proto::LogKind::Info,
+                proto::LogKind::Debug,
+                proto::LogKind::Trace,
+            ]
+        );
+        // A console line's subject is the `file:line`, and its detail the
+        // message; both are just columns, and neither is reinterpreted here.
+        assert_eq!(lines[4].source, "sp_operation_runner");
+        assert_eq!(lines[4].subject, "operation.rs:214");
+        assert_eq!(lines[4].detail, "Operation op_move failed to start.");
+        assert!(lines[4].kind.is_console());
+        assert!(!lines[0].kind.is_console());
+    }
+
+    /// The tags in the file are micro_sp's, and the frontend greps for them; a
+    /// tag it does not recognise silently becomes `Other`, so pin them here.
+    #[test]
+    fn the_tags_round_trip_through_from_tag() {
+        for kind in proto::LogKind::ALL {
+            if *kind == proto::LogKind::Other {
+                continue;
+            }
+            assert_eq!(
+                proto::LogKind::from_tag(kind.tag()),
+                *kind,
+                "{} does not round trip",
+                kind.tag()
+            );
+            assert!(kind.tag().len() <= 5, "{} does not fit the kind column", kind.tag());
+        }
     }
 
     /// A variable's value can itself contain the column separator.

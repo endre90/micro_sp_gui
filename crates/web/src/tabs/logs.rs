@@ -6,6 +6,13 @@
 //! *current* one-line status of each runner and operation comes from the
 //! `{name}_information` variables that are already in the state feed.
 //!
+//! Since micro_sp v0.5.0 that file also carries the console log - every
+//! `log::error!`/`warn!`/`info!`/`debug!`/`trace!` the runners print is mirrored
+//! into it, tagged `ERR`/`WARN`/`INFO`/`DEBUG`/`TRACE` in the same kind column
+//! as `OP`/`TRANS`/`SOP`/`VAR`. So they are shown as rows of the same table,
+//! filtered by the same toggles and matched by the same grep: whatever finds a
+//! line here finds it in the file too.
+//!
 //! Filtering happens here rather than on the server, over the ring buffer the
 //! browser already holds, so toggling a kind is instant. The same filter is sent
 //! along as a backfill query so widening it fetches the history to match.
@@ -64,20 +71,18 @@ impl LogsTab {
 
     fn filter_row(&mut self, ui: &mut egui::Ui, api: &mut Api) {
         ui.horizontal_wrapped(|ui| {
-            for kind in proto::LogKind::ALL {
-                let mut on = self.kinds.contains(kind);
-                if ui
-                    .toggle_value(&mut on, kind.label())
-                    .on_hover_text(format!("Lines tagged {}", kind.tag()))
-                    .changed()
-                {
-                    if on {
-                        self.kinds.insert(*kind);
-                    } else {
-                        self.kinds.remove(kind);
-                    }
-                }
+            // Events first, then the mirrored console levels: two families of
+            // line in one file, and the separator is the only hint that the
+            // right-hand ones came from stderr.
+            for kind in proto::LogKind::EVENTS {
+                self.kind_toggle(ui, *kind);
             }
+            ui.separator();
+            for kind in proto::LogKind::LEVELS {
+                self.kind_toggle(ui, *kind);
+            }
+            ui.separator();
+            self.kind_toggle(ui, proto::LogKind::Other);
 
             ui.separator();
             ui.label("grep");
@@ -137,6 +142,24 @@ impl LogsTab {
         if self.last_query.as_ref() != Some(&query) {
             self.last_query = Some(query.clone());
             api.send_subscribe(query);
+        }
+    }
+
+    /// One kind's toggle. The hover text names the tag rather than the label,
+    /// because the tag is what a `grep` over the file would use.
+    fn kind_toggle(&mut self, ui: &mut egui::Ui, kind: proto::LogKind) {
+        let mut on = self.kinds.contains(&kind);
+        let text = egui::RichText::new(kind.label()).color(kind_colour(kind));
+        if ui
+            .toggle_value(&mut on, text)
+            .on_hover_text(format!("Lines tagged {}", kind.tag()))
+            .changed()
+        {
+            if on {
+                self.kinds.insert(kind);
+            } else {
+                self.kinds.remove(&kind);
+            }
         }
     }
 
@@ -329,11 +352,20 @@ fn kind_colour(kind: proto::LogKind) -> egui::Color32 {
         proto::LogKind::Transition => egui::Color32::from_rgb(0xba, 0x68, 0xc8),
         proto::LogKind::Sop => egui::Color32::from_rgb(0x4d, 0xd0, 0xe1),
         proto::LogKind::Variable => egui::Color32::from_rgb(0x9e, 0x9e, 0x9e),
+        // The console levels keep the severity colours used everywhere else, so
+        // an ERR in the log reads as the same red as a failed operation.
+        proto::LogKind::Error => widgets::BAD,
+        proto::LogKind::Warn => widgets::WARN,
+        proto::LogKind::Info => egui::Color32::from_rgb(0x81, 0xc7, 0x84),
+        proto::LogKind::Debug => egui::Color32::from_rgb(0x78, 0x90, 0x9c),
+        proto::LogKind::Trace => egui::Color32::from_rgb(0x60, 0x60, 0x60),
         proto::LogKind::Other => widgets::WARN,
     }
 }
 
-/// One line, coloured by kind, with the state change picked out.
+/// One line, in the same five columns the file has: timestamp, tag, source,
+/// subject, detail. Coloured by kind, with the state change - or the severity of
+/// a mirrored console line - picked out.
 fn log_row(ui: &mut egui::Ui, line: &proto::LogLine) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 6.0;
@@ -358,7 +390,10 @@ fn log_row(ui: &mut egui::Ui, line: &proto::LogLine) {
                 .strong(),
         );
         ui.label(egui::RichText::new(&line.source).monospace().weak());
-        ui.label(egui::RichText::new(&line.subject).monospace());
+        // For a console line the subject is the `file:line` that printed it -
+        // useful, but not the point of the row, so it stays out of the way.
+        let subject = egui::RichText::new(&line.subject).monospace();
+        ui.label(if line.kind.is_console() { subject.weak() } else { subject });
 
         // Details can carry SGR escapes when a logged value came from a
         // coloured console string.
@@ -376,6 +411,16 @@ fn log_row(ui: &mut egui::Ui, line: &proto::LogLine) {
 
 /// Terminal outcomes are worth spotting in a wall of text.
 fn detail_colour(line: &proto::LogLine) -> egui::Color32 {
+    // A console line's detail is the message, and its severity is already the
+    // whole of what the row says; colour it like the tag rather than hunting for
+    // state-change words in prose that never contains any.
+    match line.kind {
+        proto::LogKind::Error | proto::LogKind::Warn => return kind_colour(line.kind),
+        proto::LogKind::Debug | proto::LogKind::Trace => return widgets::UNKNOWN,
+        proto::LogKind::Info => return egui::Color32::PLACEHOLDER,
+        _ => {}
+    }
+
     let d = line.detail.as_str();
     if d.contains("-> failed") || d.contains("-> fatal") || d.contains("-> timedout") {
         widgets::BAD
