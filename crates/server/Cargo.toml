@@ -21,7 +21,7 @@ serde_json.workspace = true
 log.workspace = true
 
 micro_sp = { git = "ssh://git@github.com/endre90/micro_sp.git", tag = "v0.5.0" }
-ur_redis_driver = { git = "ssh://git@github.com/sequenceplanner/ur_redis_driver.git", tag = "v0.2.0" }
+ur_redis_driver = { git = "ssh://git@github.com/sequenceplanner/ur_redis_driver.git", branch = "master" }
 
 # Same version as micro_sp's, so `SPConnection` (a `redis::aio::ConnectionManager`)
 # is the same type here and raw SCAN can be issued on it.

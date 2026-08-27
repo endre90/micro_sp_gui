@@ -93,34 +93,569 @@ pub const COMMAND_TYPES: &[&str] = &[
     "get_force_old",
 ];
 
-/// Dashboard commands the driver accepts, with whether each takes an argument.
-/// Mirrors `ur_redis_driver::DashboardCommand::parse`.
-pub const DASHBOARD_COMMANDS: &[(&str, bool)] = &[
-    ("stop", false),
-    ("pause", false),
-    ("play", false),
-    ("power_on", false),
-    ("power_off", false),
-    ("brake_release", false),
-    ("unlock_protective_stop", false),
-    ("reset_protective_stop", false),
-    ("close_safety_popup", false),
-    ("close_popup", false),
-    ("restart_safety", false),
-    ("shutdown", false),
-    ("robot_mode", false),
-    ("safety_status", false),
-    ("program_state", false),
-    ("is_program_running", false),
-    ("is_in_remote_control", false),
-    ("get_loaded_program", false),
-    ("get_robot_model", false),
-    ("polyscope_version", false),
-    ("load", true),
-    ("load_installation", true),
-    ("popup", true),
-    ("add_to_log", true),
+/// What a dashboard command does with `{robot_id}_dashboard_command_arg`.
+///
+/// `required` is exactly the driver's own `require_arg` check, so the server can
+/// refuse an incomplete request before writing anything rather than letting the
+/// driver fail it a poll later. `tests/mirror.rs` asserts the two agree.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DashboardArg {
+    /// The driver ignores the argument key for this command.
+    None,
+    /// Free text - a filename, a directory, a message.
+    Text { hint: &'static str, required: bool },
+    /// One of a fixed set of spellings. A non-required choice has a default the
+    /// driver falls back to, named first.
+    Choice { options: &'static [&'static str], required: bool },
+}
+
+impl DashboardArg {
+    pub fn takes_arg(&self) -> bool {
+        !matches!(self, DashboardArg::None)
+    }
+
+    pub fn is_required(&self) -> bool {
+        match self {
+            DashboardArg::None => false,
+            DashboardArg::Text { required, .. } | DashboardArg::Choice { required, .. } => {
+                *required
+            }
+        }
+    }
+
+    /// The legal spellings, or empty for free text.
+    pub fn options(&self) -> &'static [&'static str] {
+        match self {
+            DashboardArg::Choice { options, .. } => options,
+            _ => &[],
+        }
+    }
+
+    pub fn hint(&self) -> &'static str {
+        match self {
+            DashboardArg::None => "no argument",
+            DashboardArg::Text { hint, .. } => hint,
+            DashboardArg::Choice { options, .. } => options.first().copied().unwrap_or(""),
+        }
+    }
+}
+
+/// Which section of the Dashboard panel a command belongs in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DashboardGroup {
+    /// Start, stop, pause and resume.
+    Program,
+    /// The 48 V supply and the brakes.
+    Power,
+    /// Getting out of a protective or safeguard stop, and the popups that block one.
+    Safety,
+    /// Loading a program or an installation.
+    Load,
+    /// The PolyScope operational mode.
+    Mode,
+    /// Read-only: the reply *is* the answer.
+    Query,
+    /// Flight reports and support files.
+    Diagnostics,
+    /// Popups, the pendant log, and shutting the controller down.
+    Misc,
+}
+
+impl DashboardGroup {
+    pub fn title(&self) -> &'static str {
+        match self {
+            DashboardGroup::Program => "Program control",
+            DashboardGroup::Power => "Power",
+            DashboardGroup::Safety => "Safety recovery",
+            DashboardGroup::Load => "Load",
+            DashboardGroup::Mode => "Operational mode",
+            DashboardGroup::Query => "Queries",
+            DashboardGroup::Diagnostics => "Diagnostics",
+            DashboardGroup::Misc => "Misc",
+        }
+    }
+
+    /// In the order the panel draws them: what an operator reaches for during a
+    /// recovery first, the slow and destructive ones last.
+    pub const ALL: &'static [DashboardGroup] = &[
+        DashboardGroup::Program,
+        DashboardGroup::Power,
+        DashboardGroup::Safety,
+        DashboardGroup::Mode,
+        DashboardGroup::Load,
+        DashboardGroup::Query,
+        DashboardGroup::Misc,
+        DashboardGroup::Diagnostics,
+    ];
+}
+
+/// One command the driver's dashboard interface accepts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DashboardCommandSpec {
+    /// The string written to `{robot_id}_dashboard_command`.
+    pub name: &'static str,
+    /// What the button says.
+    pub label: &'static str,
+    pub group: DashboardGroup,
+    pub arg: DashboardArg,
+    /// A query: there is no fixed reply to match, so the controller's answer
+    /// lands in `{robot_id}_dashboard_request_result` and *is* the result.
+    pub query: bool,
+    /// The manual marks this one "Only Remote Control". The driver does not
+    /// pre-reject it - the controller's own refusal is the truthful answer - so
+    /// this only explains a failure the operator is already looking at.
+    pub remote_control: bool,
+    /// Loses state or takes the robot down. Drawn in red, never in a quick row.
+    pub danger: bool,
+    /// What goes on the socket to port 29999, for the tooltip. Commands with an
+    /// argument append it, so this is the prefix.
+    pub wire: &'static str,
+    pub help: &'static str,
+}
+
+impl DashboardCommandSpec {
+    pub fn takes_arg(&self) -> bool {
+        self.arg.takes_arg()
+    }
+
+    /// Whether `arg` is enough to send this command.
+    pub fn arg_is_satisfied(&self, arg: &str) -> bool {
+        !self.arg.is_required() || !arg.trim().is_empty()
+    }
+}
+
+/// Every dashboard command the driver accepts, mirroring
+/// `ur_redis_driver::DashboardCommand::parse`.
+///
+/// `quit` is deliberately absent from both: it would close the socket the driver
+/// keeps open for the life of the process.
+pub const DASHBOARD_COMMANDS: &[DashboardCommandSpec] = &[
+    // ---- program control ---------------------------------------------------
+    DashboardCommandSpec {
+        name: "stop",
+        label: "Stop",
+        group: DashboardGroup::Program,
+        arg: DashboardArg::None,
+        query: false,
+        remote_control: true,
+        danger: false,
+        wire: "stop",
+        help: "Stop the running program. This is also what a cancelled goal sends.",
+    },
+    DashboardCommandSpec {
+        name: "pause",
+        label: "Pause",
+        group: DashboardGroup::Program,
+        arg: DashboardArg::None,
+        query: false,
+        remote_control: true,
+        danger: false,
+        wire: "pause",
+        help: "Pause motion and latch it: the driver confirms PAUSED and then holds off new \
+               moves until a resume. Reported back as 'motion paused'.",
+    },
+    DashboardCommandSpec {
+        name: "resume",
+        label: "Resume",
+        group: DashboardGroup::Program,
+        arg: DashboardArg::None,
+        query: false,
+        remote_control: true,
+        danger: false,
+        wire: "play",
+        help: "Release the pause. Sends 'play' and confirms it; when the controller will not \
+               resume an injected script, the live goal is re-issued instead. Which path ran \
+               is in the reply. Fails with 'motion is not paused' if nothing is paused.",
+    },
+    DashboardCommandSpec {
+        name: "play",
+        label: "Play",
+        group: DashboardGroup::Program,
+        arg: DashboardArg::None,
+        query: false,
+        remote_control: true,
+        danger: false,
+        wire: "play",
+        help: "The bare 'play' primitive - starts the loaded pendant program and does not \
+               touch the driver's pause latch. Use Resume to release a pause.",
+    },
+    // ---- power -------------------------------------------------------------
+    DashboardCommandSpec {
+        name: "power_on",
+        label: "Power on",
+        group: DashboardGroup::Power,
+        arg: DashboardArg::None,
+        query: false,
+        remote_control: true,
+        danger: false,
+        wire: "power on",
+        help: "Power the arm on. It stops at IDLE - the brakes still need releasing.",
+    },
+    DashboardCommandSpec {
+        name: "power_off",
+        label: "Power off",
+        group: DashboardGroup::Power,
+        arg: DashboardArg::None,
+        query: false,
+        remote_control: true,
+        danger: true,
+        wire: "power off",
+        help: "Power the arm off and engage the brakes.",
+    },
+    DashboardCommandSpec {
+        name: "brake_release",
+        label: "Brake release",
+        group: DashboardGroup::Power,
+        arg: DashboardArg::None,
+        query: false,
+        remote_control: true,
+        danger: false,
+        wire: "brake release",
+        help: "Release the brakes, taking the arm from IDLE to RUNNING. Nothing moves until \
+               this has happened.",
+    },
+    // ---- safety recovery ---------------------------------------------------
+    DashboardCommandSpec {
+        name: "unlock_protective_stop",
+        label: "Unlock protective stop",
+        group: DashboardGroup::Safety,
+        arg: DashboardArg::None,
+        query: false,
+        remote_control: true,
+        danger: false,
+        wire: "unlock protective stop",
+        help: "Clear a protective stop. The controller refuses for the first 5 s of the stop, \
+               so a failure here often just means 'too early, try again'.",
+    },
+    DashboardCommandSpec {
+        name: "close_safety_popup",
+        label: "Close safety popup",
+        group: DashboardGroup::Safety,
+        arg: DashboardArg::None,
+        query: false,
+        remote_control: true,
+        danger: false,
+        wire: "close safety popup",
+        help: "Dismiss the safety popup. A safety popup blocks everything else, so this \
+               usually comes before the rest of a recovery.",
+    },
+    DashboardCommandSpec {
+        name: "close_popup",
+        label: "Close popup",
+        group: DashboardGroup::Safety,
+        arg: DashboardArg::None,
+        query: false,
+        remote_control: false,
+        danger: false,
+        wire: "close popup",
+        help: "Dismiss an ordinary popup, including one this GUI put up.",
+    },
+    DashboardCommandSpec {
+        name: "restart_safety",
+        label: "Restart safety",
+        group: DashboardGroup::Safety,
+        arg: DashboardArg::None,
+        query: false,
+        remote_control: true,
+        danger: true,
+        wire: "restart safety",
+        help: "Restart the safety system after a violation or a fault. The robot powers down \
+               and has to be powered on and brake-released again afterwards.",
+    },
+    // ---- operational mode --------------------------------------------------
+    DashboardCommandSpec {
+        name: "set_operational_mode",
+        label: "Set operational mode",
+        group: DashboardGroup::Mode,
+        arg: DashboardArg::Choice { options: &["manual", "automatic"], required: true },
+        query: false,
+        remote_control: false,
+        danger: false,
+        wire: "set operational mode",
+        help: "Override the operational mode from here, ignoring the pendant's mode selector \
+               until it is cleared. Needs a mode password set in Settings.",
+    },
+    DashboardCommandSpec {
+        name: "get_operational_mode",
+        label: "Get operational mode",
+        group: DashboardGroup::Mode,
+        arg: DashboardArg::None,
+        query: true,
+        remote_control: false,
+        danger: false,
+        wire: "get operational mode",
+        help: "MANUAL, AUTOMATIC, or NONE. NONE means no mode password has been set, which is \
+               not an error - the mode is simply not in use on this robot.",
+    },
+    DashboardCommandSpec {
+        name: "clear_operational_mode",
+        label: "Clear operational mode",
+        group: DashboardGroup::Mode,
+        arg: DashboardArg::None,
+        query: false,
+        remote_control: false,
+        danger: false,
+        wire: "clear operational mode",
+        help: "Hand the operational mode back to the pendant's selector.",
+    },
+    // ---- load --------------------------------------------------------------
+    DashboardCommandSpec {
+        name: "load",
+        label: "Load program",
+        group: DashboardGroup::Load,
+        arg: DashboardArg::Text { hint: "program.urp", required: true },
+        query: false,
+        remote_control: true,
+        danger: false,
+        wire: "load",
+        help: "Load a program file. The controller does not answer until the program and its \
+               installation have finished loading, so the driver allows 30 s for this one.",
+    },
+    DashboardCommandSpec {
+        name: "load_installation",
+        label: "Load installation",
+        group: DashboardGroup::Load,
+        arg: DashboardArg::Text { hint: "default.installation", required: true },
+        query: false,
+        remote_control: true,
+        danger: false,
+        wire: "load installation",
+        help: "Load an installation file. Also allowed 30 s.",
+    },
+    // ---- queries -----------------------------------------------------------
+    DashboardCommandSpec {
+        name: "robot_mode",
+        label: "Robot mode",
+        group: DashboardGroup::Query,
+        arg: DashboardArg::None,
+        query: true,
+        remote_control: false,
+        danger: false,
+        wire: "robotmode",
+        help: "The power/boot state of the arm: POWER_OFF, IDLE, RUNNING and so on. The same \
+               value the realtime stream publishes to {robot}_robot_mode.",
+    },
+    DashboardCommandSpec {
+        name: "safety_status",
+        label: "Safety status",
+        group: DashboardGroup::Query,
+        arg: DashboardArg::None,
+        query: true,
+        remote_control: false,
+        danger: false,
+        wire: "safetystatus",
+        help: "Finer-grained than safety mode: it distinguishes the kinds of safeguard stop \
+               (AUTOMATIC_MODE_SAFEGUARD_STOP, SYSTEM_THREE_POSITION_ENABLING_STOP). \
+               Dashboard-only - the realtime stream has no equivalent field.",
+    },
+    DashboardCommandSpec {
+        name: "safety_mode",
+        label: "Safety mode",
+        group: DashboardGroup::Query,
+        arg: DashboardArg::None,
+        query: true,
+        remote_control: false,
+        danger: false,
+        wire: "safetymode",
+        help: "Deprecated by UR in favour of safety status, but it is what the realtime stream \
+               reports, so it is the query that cross-checks {robot}_safety_mode.",
+    },
+    DashboardCommandSpec {
+        name: "program_state",
+        label: "Program state",
+        group: DashboardGroup::Query,
+        arg: DashboardArg::None,
+        query: true,
+        remote_control: false,
+        danger: false,
+        wire: "programState",
+        help: "STOPPED, PLAYING or PAUSED, plus the program name. Describes the loaded pendant \
+               program, so it stays STOPPED while an injected script runs.",
+    },
+    DashboardCommandSpec {
+        name: "is_program_running",
+        label: "Program running?",
+        group: DashboardGroup::Query,
+        arg: DashboardArg::None,
+        query: true,
+        remote_control: false,
+        danger: false,
+        wire: "running",
+        help: "Whether a program is executing. Unlike program state, this does track the \
+               driver's own injected scripts.",
+    },
+    DashboardCommandSpec {
+        name: "is_program_saved",
+        label: "Program saved?",
+        group: DashboardGroup::Query,
+        arg: DashboardArg::None,
+        query: true,
+        remote_control: false,
+        danger: false,
+        wire: "isProgramSaved",
+        help: "Whether the loaded program has unsaved changes. The reply carries the program \
+               name after the flag.",
+    },
+    DashboardCommandSpec {
+        name: "is_in_remote_control",
+        label: "Remote control?",
+        group: DashboardGroup::Query,
+        arg: DashboardArg::None,
+        query: true,
+        remote_control: false,
+        danger: false,
+        wire: "is in remote control",
+        help: "Whether the robot is in Remote Control. Local control is the single most common \
+               reason a dashboard action is refused.",
+    },
+    DashboardCommandSpec {
+        name: "get_loaded_program",
+        label: "Loaded program",
+        group: DashboardGroup::Query,
+        arg: DashboardArg::None,
+        query: true,
+        remote_control: false,
+        danger: false,
+        wire: "get loaded program",
+        help: "The path of the loaded program, or 'No program loaded'.",
+    },
+    DashboardCommandSpec {
+        name: "get_robot_model",
+        label: "Robot model",
+        group: DashboardGroup::Query,
+        arg: DashboardArg::None,
+        query: true,
+        remote_control: false,
+        danger: false,
+        wire: "get robot model",
+        help: "UR5, UR10e and so on. Also published to {robot}_robot_model once per dashboard \
+               connection, so the strip above already shows it.",
+    },
+    DashboardCommandSpec {
+        name: "get_serial_number",
+        label: "Serial number",
+        group: DashboardGroup::Query,
+        arg: DashboardArg::None,
+        query: true,
+        remote_control: false,
+        danger: false,
+        wire: "get serial number",
+        help: "The controller's serial number. Also published to {robot}_serial_number.",
+    },
+    DashboardCommandSpec {
+        name: "polyscope_version",
+        label: "PolyScope version",
+        group: DashboardGroup::Query,
+        arg: DashboardArg::None,
+        query: true,
+        remote_control: false,
+        danger: false,
+        wire: "PolyscopeVersion",
+        help: "The full PolyScope version string. Also published to \
+               {robot}_polyscope_version.",
+    },
+    DashboardCommandSpec {
+        name: "version",
+        label: "Version",
+        group: DashboardGroup::Query,
+        arg: DashboardArg::None,
+        query: true,
+        remote_control: false,
+        danger: false,
+        wire: "version",
+        help: "The short version number. PolyScope 5.13.0 and later only - older controllers \
+               answer with an error.",
+    },
+    // ---- misc --------------------------------------------------------------
+    DashboardCommandSpec {
+        name: "popup",
+        label: "Show popup",
+        group: DashboardGroup::Misc,
+        arg: DashboardArg::Text { hint: "message", required: false },
+        query: false,
+        remote_control: false,
+        danger: false,
+        wire: "popup",
+        help: "Put a popup on the pendant. It blocks the operator until dismissed there or by \
+               Close popup.",
+    },
+    DashboardCommandSpec {
+        name: "add_to_log",
+        label: "Add to log",
+        group: DashboardGroup::Misc,
+        arg: DashboardArg::Text { hint: "message", required: false },
+        query: false,
+        remote_control: false,
+        danger: false,
+        wire: "addToLog",
+        help: "Write a line into the pendant's log, without interrupting anyone.",
+    },
+    DashboardCommandSpec {
+        name: "shutdown",
+        label: "Shut down",
+        group: DashboardGroup::Misc,
+        arg: DashboardArg::None,
+        query: false,
+        remote_control: false,
+        danger: true,
+        wire: "shutdown",
+        help: "Shut the controller down. Nothing here can bring it back - somebody has to \
+               press the power button on the control box.",
+    },
+    // ---- diagnostics -------------------------------------------------------
+    DashboardCommandSpec {
+        name: "generate_flight_report",
+        label: "Generate flight report",
+        group: DashboardGroup::Diagnostics,
+        arg: DashboardArg::Choice {
+            options: &["system", "controller", "software"],
+            required: false,
+        },
+        query: true,
+        remote_control: false,
+        danger: false,
+        wire: "generate flight report",
+        help: "Produce a flight report and answer with its id. The manual allows this a few \
+               minutes; the driver waits up to 5. Defaults to 'system'.",
+    },
+    DashboardCommandSpec {
+        name: "generate_support_file",
+        label: "Generate support file",
+        group: DashboardGroup::Diagnostics,
+        arg: DashboardArg::Text { hint: "directory under /programs", required: true },
+        query: false,
+        remote_control: false,
+        danger: false,
+        wire: "generate support file",
+        help: "Bundle the support file into a directory inside the programs directory. The \
+               manual says up to 10 minutes, and the driver waits that long.",
+    },
 ];
+
+/// Names the driver still accepts that are not offered as commands of their own.
+///
+/// `reset_protective_stop` is what this GUI and the old native one wrote before
+/// the driver grew the full command set; the driver kept it as an alias, so the
+/// server resolves it rather than rejecting a request that would have worked.
+pub const DASHBOARD_ALIASES: &[(&str, &str)] = &[
+    ("reset_protective_stop", "unlock_protective_stop"),
+];
+
+/// Look up a command by the name written to `{robot_id}_dashboard_command`,
+/// resolving [`DASHBOARD_ALIASES`].
+pub fn dashboard_spec(name: &str) -> Option<&'static DashboardCommandSpec> {
+    let name = name.trim();
+    let name = DASHBOARD_ALIASES
+        .iter()
+        .find(|(alias, _)| *alias == name)
+        .map_or(name, |(_, target)| *target);
+    DASHBOARD_COMMANDS.iter().find(|spec| spec.name == name)
+}
+
+/// The commands in one group, in table order.
+pub fn dashboard_commands_in(group: DashboardGroup) -> impl Iterator<Item = &'static DashboardCommandSpec> {
+    DASHBOARD_COMMANDS.iter().filter(move |spec| spec.group == group)
+}
 
 /// Everything the driver reads for one motion request.
 ///
@@ -262,6 +797,19 @@ pub struct RobotStatus {
     /// `None` when unpublished; see [`RobotStatus::robot_connected`].
     pub dashboard_connected: Option<bool>,
     pub remote_control: bool,
+    /// MANUAL, AUTOMATIC or NONE. NONE is the answer when no mode password has
+    /// been set, which means the mode is not in use rather than that the query
+    /// failed.
+    pub operational_mode: String,
+    /// The driver's own pause latch, set by the `pause` dashboard command and
+    /// cleared by `resume`. While it is set the driver holds off new motion, so
+    /// this is not the same fact as `program_state == "PAUSED"`.
+    pub motion_paused: bool,
+    /// Read once per dashboard connection, and blanked while that socket is
+    /// down rather than left stale.
+    pub robot_model: String,
+    pub serial_number: String,
+    pub polyscope_version: String,
     pub tcp_pose: Vec<f64>,
     pub tcp_force: Vec<f64>,
     pub joint_states: Vec<f64>,
@@ -287,6 +835,17 @@ impl RobotStatus {
 
     pub fn request_failed(&self) -> bool {
         self.request_state == "failed"
+    }
+
+    /// The dashboard handshake failed, so the last command did not take effect.
+    pub fn dashboard_failed(&self) -> bool {
+        self.dashboard_request_state == "failed"
+    }
+
+    /// Whether a `resume` would be accepted: the driver refuses one with
+    /// "motion is not paused" when its latch is clear.
+    pub fn can_resume(&self) -> bool {
+        self.motion_paused
     }
 
     /// Safety modes in which the driver will accept a goal at all.

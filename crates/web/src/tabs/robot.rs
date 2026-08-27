@@ -10,6 +10,7 @@ use crate::api::Api;
 use crate::widgets;
 use micro_sp_gui_protocol as proto;
 
+#[derive(Default)]
 pub struct RobotTab {
     cmd: proto::RobotCommand,
     /// Which payload preset is selected. The old tab had one field backing three
@@ -18,25 +19,15 @@ pub struct RobotTab {
     manual_payload: bool,
     payload: proto::Payload,
 
-    dashboard_command: String,
-    dashboard_arg: String,
+    /// The argument each dashboard command was last given, keyed by command
+    /// name. Per-command rather than one shared field, so typing a program name
+    /// does not silently become the text of the next popup.
+    dashboard_args: std::collections::BTreeMap<&'static str, String>,
+    /// Which destructive dashboard command is armed, if any. See `group_row`.
+    pending_danger: Option<&'static str>,
     /// Filled from the live joint states on request, rather than every frame -
     /// otherwise the fields could never be edited.
     copy_joints_requested: bool,
-}
-
-impl Default for RobotTab {
-    fn default() -> Self {
-        Self {
-            cmd: proto::RobotCommand::default(),
-            payload_preset: 0,
-            manual_payload: false,
-            payload: proto::Payload::default(),
-            dashboard_command: "reset_protective_stop".to_string(),
-            dashboard_arg: String::new(),
-            copy_joints_requested: false,
-        }
-    }
 }
 
 impl RobotTab {
@@ -126,6 +117,16 @@ impl RobotTab {
                 ui.separator();
                 ui.label(egui::RichText::new("remote").color(widgets::OK));
             }
+            if status.motion_paused {
+                ui.separator();
+                // The driver's own latch, not the controller's program state:
+                // while it is set no new move is admitted, so a request that
+                // just sits there is explained by this and nothing else.
+                ui.label(egui::RichText::new("paused").color(widgets::WARN).strong())
+                    .on_hover_text(
+                        "The driver's pause latch is set. It holds off new moves until a                          dashboard 'Resume' clears it.",
+                    );
+            }
             ui.separator();
             ui.label(egui::RichText::new(format!("speed ×{:.2}", status.speed_scaling)).weak());
         });
@@ -186,12 +187,6 @@ impl RobotTab {
             ui.separator();
             widgets::field(ui, "force", &format!("{:.2} N", status.force_feedback));
         });
-
-        if status.dashboard_request_result != "UNKNOWN"
-            && !status.dashboard_request_result.is_empty()
-        {
-            widgets::field(ui, "dashboard says", &status.dashboard_request_result);
-        }
     }
 
     fn command_section(&mut self, ui: &mut egui::Ui, api: &mut Api) {
@@ -426,76 +421,273 @@ impl RobotTab {
         }
     }
 
+    /// The driver's dashboard interface, one button per command it accepts.
+    ///
+    /// Every row is generated from `proto::DASHBOARD_COMMANDS`, so a command the
+    /// driver gains appears here by editing that table and nothing else.
     fn dashboard_section(&mut self, ui: &mut egui::Ui, api: &mut Api) {
         ui.label(egui::RichText::new("Dashboard").strong());
         ui.label(
             egui::RichText::new(
                 "A separate handshake from motion requests, so a slow dashboard round trip \
-                 cannot stall the driver's control loop.",
+                 cannot stall the driver's control loop. A query's answer comes back in \
+                 'dashboard says' below.",
             )
             .weak()
             .small(),
         );
 
-        let takes_arg = proto::DASHBOARD_COMMANDS
-            .iter()
-            .find(|(name, _)| *name == self.dashboard_command.as_str())
-            .map(|(_, arg)| *arg)
-            .unwrap_or(false);
+        let status = api.robot_status().cloned();
+        self.dashboard_status(ui, status.as_ref());
 
-        ui.horizontal_wrapped(|ui| {
-            egui::ComboBox::from_id_salt("dashboard_command")
-                .selected_text(&self.dashboard_command)
-                .width(220.0)
-                .show_ui(ui, |ui| {
-                    for (name, _) in proto::DASHBOARD_COMMANDS {
-                        ui.selectable_value(
-                            &mut self.dashboard_command,
-                            name.to_string(),
-                            *name,
-                        );
-                    }
+        // Collected while drawing, sent afterwards: the rows below borrow the
+        // tab's own fields, and `api` is needed to send.
+        let mut to_send: Vec<(&'static str, Option<String>)> = Vec::new();
+        let enabled = api.robot_id.is_some();
+        let args = &mut self.dashboard_args;
+        let pending = &mut self.pending_danger;
+
+        for group in proto::DashboardGroup::ALL {
+            // The two slow ones - minutes, not seconds - stay folded away.
+            if *group == proto::DashboardGroup::Diagnostics {
+                egui::CollapsingHeader::new(group.title()).default_open(false).show(ui, |ui| {
+                    ui.label(
+                        egui::RichText::new(
+                            "These do not answer until the controller has finished: up to 5 \
+                             minutes for a flight report, 10 for a support file.",
+                        )
+                        .weak()
+                        .small(),
+                    );
+                    group_row(ui, *group, args, pending, enabled, &mut to_send);
                 });
+            } else {
+                group_row(ui, *group, args, pending, enabled, &mut to_send);
+            }
+        }
 
-            ui.add_enabled(
-                takes_arg,
-                egui::TextEdit::singleline(&mut self.dashboard_arg)
-                    .hint_text(if takes_arg { "argument" } else { "no argument" })
-                    .desired_width(200.0),
+        if let Some(armed) = pending.and_then(proto::dashboard_spec) {
+            ui.label(
+                egui::RichText::new(format!(
+                    "⚠ '{}' is armed - click it again to send it, or click any other command \
+                     to drop it.",
+                    armed.label
+                ))
+                .color(widgets::WARN),
             );
+        }
 
-            let ready = api.robot_id.is_some()
-                && (!takes_arg || !self.dashboard_arg.trim().is_empty());
-            if ui.add_enabled(ready, egui::Button::new("Send")).clicked()
-                && let Some(robot_id) = api.robot_id.clone()
-            {
+        for (command, arg) in to_send {
+            if let Some(robot_id) = api.robot_id.clone() {
                 api.robot_dashboard(proto::RobotDashboardCommand {
                     robot_id,
-                    command: self.dashboard_command.clone(),
-                    arg: if takes_arg {
-                        Some(self.dashboard_arg.trim().to_string())
-                    } else {
-                        None
-                    },
+                    command: command.to_string(),
+                    arg,
                 });
+            }
+        }
+    }
+
+    /// What the dashboard half of the driver is currently reporting.
+    fn dashboard_status(&self, ui: &mut egui::Ui, status: Option<&proto::RobotStatus>) {
+        let Some(status) = status else { return };
+
+        ui.horizontal_wrapped(|ui| {
+            widgets::light(
+                ui,
+                status.dashboard_connected,
+                "dashboard",
+                "The driver's socket to port 29999. Nothing below can work without it.",
+            );
+            ui.separator();
+
+            // Local control is the most common reason a dashboard action is
+            // refused, and the controller's own "Failed to execute" does not
+            // say so - so say it here, before the click.
+            let (remote_label, remote_colour) = if status.remote_control {
+                ("remote control", widgets::OK)
+            } else {
+                ("local control", widgets::WARN)
+            };
+            ui.label(egui::RichText::new(remote_label).color(remote_colour))
+                .on_hover_text(
+                    "Most of these commands are marked 'Only Remote Control' in UR's manual \
+                     and the controller refuses them in Local control.",
+                );
+
+            ui.separator();
+            ui.label(egui::RichText::new("op mode").weak());
+            ui.label(egui::RichText::new(&status.operational_mode).monospace()).on_hover_text(
+                "MANUAL, AUTOMATIC, or NONE. NONE means no mode password has been set, so the \
+                 mode is simply not in use on this robot.",
+            );
+
+            if status.motion_paused {
+                ui.separator();
+                ui.label(egui::RichText::new("motion paused").color(widgets::WARN).strong())
+                    .on_hover_text(
+                        "The driver's own pause latch is set, so it will hold off new moves \
+                         until Resume clears it.",
+                    );
             }
         });
 
-        // The handful that get reached for in an actual recovery.
+        // The request row for this handshake, separate from the motion one.
         ui.horizontal_wrapped(|ui| {
-            for quick in ["reset_protective_stop", "power_on", "brake_release", "stop", "play"] {
-                if ui.small_button(quick).clicked()
-                    && let Some(robot_id) = api.robot_id.clone()
-                {
-                    api.robot_dashboard(proto::RobotDashboardCommand {
-                        robot_id,
-                        command: quick.to_string(),
-                        arg: None,
-                    });
-                }
+            let (label, colour) = match status.dashboard_request_state.as_str() {
+                "succeeded" => ("succeeded", widgets::OK),
+                "failed" => ("failed", widgets::BAD),
+                "executing" => ("executing", widgets::WARN),
+                other => (other, widgets::UNKNOWN),
+            };
+            ui.label(egui::RichText::new("last command").weak());
+            ui.label(egui::RichText::new(label).color(colour).strong()).on_hover_text(
+                "The driver's dashboard handshake state: initial → executing → \
+                 succeeded|failed.",
+            );
+
+            if status.dashboard_request_result != "UNKNOWN"
+                && !status.dashboard_request_result.is_empty()
+            {
+                ui.separator();
+                ui.label(egui::RichText::new("dashboard says").weak());
+                let colour = if status.dashboard_failed() {
+                    widgets::BAD
+                } else {
+                    ui.visuals().text_color()
+                };
+                ui.label(
+                    egui::RichText::new(&status.dashboard_request_result)
+                        .monospace()
+                        .color(colour),
+                )
+                .on_hover_text(
+                    "The controller's own reply, verbatim. For a query this line is the answer.",
+                );
             }
         });
+
+        // Read once per dashboard connection, and blanked rather than left stale
+        // when that socket drops - so an empty row here means "no dashboard".
+        if status.robot_model != "UNKNOWN" && !status.robot_model.is_empty() {
+            ui.horizontal_wrapped(|ui| {
+                widgets::field(ui, "controller", &status.robot_model);
+                ui.separator();
+                widgets::field(ui, "serial", &status.serial_number);
+                ui.separator();
+                widgets::field(ui, "polyscope", &status.polyscope_version);
+            });
+        }
+
+        ui.separator();
     }
+}
+
+/// One row of the dashboard panel: every command in `group`, each preceded by
+/// its argument widget when it takes one.
+///
+/// `pending` arms the destructive commands: the first click on one only marks
+/// it, and a second click sends it. Powering the arm down or restarting the
+/// safety system in the middle of a shift because a button was next to the one
+/// being aimed at is not a recoverable mistake.
+fn group_row(
+    ui: &mut egui::Ui,
+    group: proto::DashboardGroup,
+    args: &mut std::collections::BTreeMap<&'static str, String>,
+    pending: &mut Option<&'static str>,
+    enabled: bool,
+    to_send: &mut Vec<(&'static str, Option<String>)>,
+) {
+    ui.horizontal_wrapped(|ui| {
+        ui.label(egui::RichText::new(group.title()).weak());
+
+        for spec in proto::dashboard_commands_in(group) {
+            // A choice starts on the driver's own default, which the table names
+            // first; free text starts empty.
+            let arg = args.entry(spec.name).or_insert_with(|| {
+                spec.arg.options().first().copied().unwrap_or_default().to_string()
+            });
+
+            match spec.arg {
+                proto::DashboardArg::None => {}
+                proto::DashboardArg::Text { hint, .. } => {
+                    ui.add(
+                        egui::TextEdit::singleline(arg)
+                            .hint_text(hint)
+                            .desired_width(150.0),
+                    );
+                }
+                proto::DashboardArg::Choice { options, .. } => {
+                    egui::ComboBox::from_id_salt(spec.name)
+                        .selected_text(arg.clone())
+                        .width(110.0)
+                        .show_ui(ui, |ui| {
+                            for option in options {
+                                ui.selectable_value(arg, option.to_string(), *option);
+                            }
+                        });
+                }
+            }
+
+            let armed = *pending == Some(spec.name);
+            let mut text = egui::RichText::new(if armed {
+                format!("{} ‽", spec.label)
+            } else {
+                spec.label.to_string()
+            });
+            if spec.danger {
+                text = text.color(widgets::BAD);
+            }
+            if armed {
+                text = text.strong();
+            }
+
+            let ready = enabled && spec.arg_is_satisfied(arg);
+            // A dozen queries in one row would dominate the panel; they are
+            // read-only, so they get the small treatment.
+            let mut button = egui::Button::new(text);
+            if spec.query {
+                button = button.small();
+            }
+            let clicked = ui
+                .add_enabled(ready, button)
+                .on_hover_text(hover_text(spec, armed))
+                .clicked();
+
+            if clicked {
+                if spec.danger && !armed {
+                    *pending = Some(spec.name);
+                } else {
+                    *pending = None;
+                    to_send.push((
+                        spec.name,
+                        if spec.takes_arg() { Some(arg.clone()) } else { None },
+                    ));
+                }
+            }
+        }
+    });
+}
+
+/// The tooltip for one command: what it does, what actually goes on the socket,
+/// and the two facts that explain most refusals.
+fn hover_text(spec: &proto::DashboardCommandSpec, armed: bool) -> String {
+    let mut text = format!("{}\n\nSends '{}' on port 29999.", spec.help, spec.wire);
+    if spec.query {
+        text.push_str("\n\nA query: the controller's answer comes back in 'dashboard says'.");
+    }
+    if spec.remote_control {
+        text.push_str("\n\nUR marks this 'Only Remote Control' - the controller refuses it in \
+                       Local control.");
+    }
+    if spec.danger {
+        text.push_str(if armed {
+            "\n\nArmed. Click again to send it."
+        } else {
+            "\n\nDestructive: the first click only arms it."
+        });
+    }
+    text
 }
 
 fn picker(

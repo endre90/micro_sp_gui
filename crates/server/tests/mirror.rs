@@ -163,6 +163,142 @@ fn every_written_robot_key_is_one_the_driver_knows() {
     );
 }
 
+/// Every dashboard command the protocol offers must be one the driver parses,
+/// with the same argument rules and the same wire spelling.
+///
+/// This is the test that matters most for the Dashboard panel: the frontend
+/// builds its buttons from `proto::DASHBOARD_COMMANDS`, so a name the driver has
+/// renamed would show up as a button that always fails.
+#[test]
+fn dashboard_commands_match_the_driver() {
+    use ur_redis_driver::DashboardCommand;
+
+    for spec in proto::DASHBOARD_COMMANDS {
+        // A sample argument the driver should accept: the first legal spelling
+        // for a choice, anything non-empty for free text.
+        let sample = match spec.arg {
+            proto::DashboardArg::None => "",
+            proto::DashboardArg::Text { .. } => "sample",
+            proto::DashboardArg::Choice { options, .. } => options[0],
+        };
+
+        let parsed = DashboardCommand::parse(spec.name, sample).unwrap_or_else(|e| {
+            panic!("the driver rejects '{}' with arg '{sample}': {e}", spec.name)
+        });
+
+        // Commands with an argument append it, so the spec carries the prefix.
+        let wire = parsed.wire();
+        if spec.takes_arg() {
+            assert!(
+                wire.starts_with(spec.wire),
+                "'{}' sends '{wire}', not '{}...'",
+                spec.name,
+                spec.wire
+            );
+        } else {
+            assert_eq!(wire, spec.wire, "wire spelling drifted for '{}'", spec.name);
+        }
+
+        // `expect() == None` is exactly the driver's definition of a query.
+        assert_eq!(
+            parsed.expect().is_none(),
+            spec.query,
+            "'{}' is {} a query in the driver",
+            spec.name,
+            if spec.query { "not" } else { "" }
+        );
+
+        assert_eq!(
+            parsed.requires_remote_control(),
+            spec.remote_control,
+            "the remote-control requirement drifted for '{}'",
+            spec.name
+        );
+
+        // The whole point of `DashboardArg::required`: the server refuses what
+        // the driver would have refused, one poll earlier.
+        assert_eq!(
+            DashboardCommand::parse(spec.name, "").is_err(),
+            spec.arg.is_required(),
+            "'{}' disagrees with the driver about needing an argument",
+            spec.name
+        );
+
+        for option in spec.arg.options() {
+            assert!(
+                DashboardCommand::parse(spec.name, option).is_ok(),
+                "the driver rejects '{}' for '{}'",
+                option,
+                spec.name
+            );
+        }
+    }
+
+    for (alias, target) in proto::DASHBOARD_ALIASES {
+        assert!(
+            DashboardCommand::parse(alias, "").is_ok(),
+            "the driver no longer accepts the alias '{alias}'"
+        );
+        let spec = proto::dashboard_spec(alias).expect("an alias resolves to a command");
+        assert_eq!(spec.name, *target);
+        assert_eq!(
+            DashboardCommand::parse(alias, "").unwrap(),
+            DashboardCommand::parse(target, "").unwrap(),
+            "'{alias}' and '{target}' are no longer the same command"
+        );
+    }
+
+    // And the negative case, so the checks above are not vacuous.
+    assert!(DashboardCommand::parse("no_such_command", "").is_err());
+    assert!(proto::dashboard_spec("no_such_command").is_none());
+}
+
+/// The table is well-formed: no command listed twice, and every group the panel
+/// draws has something in it.
+///
+/// The driver exposes `parse` but no list of names, so nothing can prove the
+/// panel covers every command it accepts. This at least catches the mistakes
+/// that are easy to make while editing the table by hand.
+#[test]
+fn the_dashboard_panel_offers_every_command_once() {
+    let mut names: Vec<&str> = proto::DASHBOARD_COMMANDS.iter().map(|s| s.name).collect();
+    let total = names.len();
+    names.sort();
+    names.dedup();
+    assert_eq!(names.len(), total, "a dashboard command is listed twice");
+
+    // Every command lands in a group the panel actually draws.
+    for spec in proto::DASHBOARD_COMMANDS {
+        assert!(
+            proto::DashboardGroup::ALL.contains(&spec.group),
+            "'{}' is in a group the panel never draws",
+            spec.name
+        );
+    }
+    for group in proto::DashboardGroup::ALL {
+        assert!(
+            proto::dashboard_commands_in(*group).next().is_some(),
+            "the panel draws an empty '{}' group",
+            group.title()
+        );
+    }
+}
+
+/// Every key the Robot tab reads must be one the driver seeds, or the tab shows
+/// a permanently blank field and nothing says why.
+#[test]
+fn every_robot_status_key_is_one_the_driver_seeds() {
+    let seeded = ur_redis_driver::generate_robot_interface_state("r1", "test");
+    let missing: Vec<String> = micro_sp_gui_server::status::robot_keys("r1")
+        .into_iter()
+        .filter(|key| !seeded.contains(key))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "the driver does not publish these keys the Robot tab reads: {missing:?}"
+    );
+}
+
 /// `GoalPriority`'s integer encoding is what goes on the wire.
 #[test]
 fn goal_priority_encoding_matches() {

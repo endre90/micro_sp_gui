@@ -4195,7 +4195,7 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 [[package]]
 name = "ur_redis_driver"
 version = "0.1.0"
-source = "git+ssh://git@github.com/sequenceplanner/ur_redis_driver.git?tag=v0.2.0#2f491f5bbc5fff4cc932dbea1cb63ed8170eeb57"
+source = "git+ssh://git@github.com/sequenceplanner/ur_redis_driver.git?branch=master#1364e175bf29f20b298376381561c4a8325330b6"
 dependencies = [
  "base64",
  "bytes 0.5.6",

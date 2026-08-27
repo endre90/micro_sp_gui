@@ -198,6 +198,53 @@ pub async fn cancel(cm: &Arc<ConnectionManager>, robot_id: &str) -> Result<(), S
     Ok(())
 }
 
+/// Everything the driver would reject a dashboard request for, checked here so
+/// the operator is told before anything is written.
+///
+/// Returns the resolved command name: [`proto::dashboard_spec`] maps the driver's
+/// aliases onto their canonical spelling, and writing the canonical one keeps
+/// `dashboard_command` readable next to the reply it produced.
+fn validate_dashboard(req: &proto::RobotDashboardCommand) -> Result<(&'static str, String), String> {
+    if req.robot_id.trim().is_empty() {
+        return Err("Robot id is empty.".to_string());
+    }
+    let spec = proto::dashboard_spec(&req.command)
+        .ok_or_else(|| format!("Unknown dashboard command '{}'.", req.command))?;
+
+    // The driver reads the argument key for every command, so an argument aimed
+    // at a command that ignores one is dropped rather than sent - otherwise a
+    // stale value would sit in Redis looking like it applied.
+    let arg = if spec.takes_arg() {
+        req.arg.clone().unwrap_or_default().trim().to_string()
+    } else {
+        String::new()
+    };
+
+    if !spec.arg_is_satisfied(&arg) {
+        return Err(format!(
+            "Dashboard command '{}' needs an argument ({}).",
+            spec.name,
+            spec.arg.hint()
+        ));
+    }
+    // A choice with a spelling the driver does not know fails in the driver with
+    // a message nobody sees unless they are watching Redis.
+    let options = spec.arg.options();
+    if !options.is_empty()
+        && !arg.is_empty()
+        && !options.iter().any(|o| o.eq_ignore_ascii_case(&arg))
+    {
+        return Err(format!(
+            "Dashboard command '{}' takes one of {}, not '{}'.",
+            spec.name,
+            options.join(", "),
+            arg
+        ));
+    }
+
+    Ok((spec.name, arg))
+}
+
 /// Send a dashboard command.
 ///
 /// The dashboard has its own handshake keys so a slow dashboard round trip
@@ -208,22 +255,12 @@ pub async fn dashboard(
     cm: &Arc<ConnectionManager>,
     req: &proto::RobotDashboardCommand,
 ) -> Result<(), String> {
-    if req.robot_id.trim().is_empty() {
-        return Err("Robot id is empty.".to_string());
-    }
-    let entry = proto::DASHBOARD_COMMANDS
-        .iter()
-        .find(|(name, _)| *name == req.command.as_str())
-        .ok_or_else(|| format!("Unknown dashboard command '{}'.", req.command))?;
-    let arg = req.arg.clone().unwrap_or_default();
-    if entry.1 && arg.trim().is_empty() {
-        return Err(format!("Dashboard command '{}' needs an argument.", req.command));
-    }
+    let (command, arg) = validate_dashboard(req)?;
 
     let r = &req.robot_id;
     let state = State::new();
     let state = state.add(
-        assign!(v!(&&format!("{}_dashboard_command", r)), req.command.clone().to_spvalue()),
+        assign!(v!(&&format!("{}_dashboard_command", r)), command.to_spvalue()),
         LOG_TARGET,
     );
     let state = state.add(
@@ -241,6 +278,65 @@ pub async fn dashboard(
 
     let mut con = cm.get_connection().await;
     StateManager::set_state(&mut con, &state).await;
-    log::info!(target: LOG_TARGET, "Dashboard '{}' -> '{}'.", req.command, r);
+    log::info!(target: LOG_TARGET, "Dashboard '{}' -> '{}'.", command, r);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn req(command: &str, arg: Option<&str>) -> proto::RobotDashboardCommand {
+        proto::RobotDashboardCommand {
+            robot_id: "r1".to_string(),
+            command: command.to_string(),
+            arg: arg.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn an_alias_resolves_to_the_canonical_name() {
+        let (command, arg) = validate_dashboard(&req("reset_protective_stop", None)).unwrap();
+        assert_eq!(command, "unlock_protective_stop");
+        assert!(arg.is_empty());
+    }
+
+    #[test]
+    fn a_missing_required_argument_is_refused() {
+        assert!(validate_dashboard(&req("load", None)).is_err());
+        assert!(validate_dashboard(&req("load", Some("   "))).is_err());
+        assert_eq!(
+            validate_dashboard(&req("load", Some(" prog.urp "))).unwrap(),
+            ("load", "prog.urp".to_string())
+        );
+    }
+
+    #[test]
+    fn an_optional_argument_may_be_left_out() {
+        // `generate_flight_report` defaults to `system` in the driver.
+        assert_eq!(
+            validate_dashboard(&req("generate_flight_report", None)).unwrap(),
+            ("generate_flight_report", String::new())
+        );
+    }
+
+    #[test]
+    fn a_choice_outside_the_options_is_refused() {
+        assert!(validate_dashboard(&req("set_operational_mode", Some("sideways"))).is_err());
+        assert!(validate_dashboard(&req("set_operational_mode", Some("Manual"))).is_ok());
+    }
+
+    #[test]
+    fn an_argument_to_an_argument_less_command_is_dropped() {
+        let (_, arg) = validate_dashboard(&req("stop", Some("nonsense"))).unwrap();
+        assert!(arg.is_empty(), "a stale arg must not be written as if it applied");
+    }
+
+    #[test]
+    fn an_unknown_command_and_an_empty_robot_id_are_both_refused() {
+        assert!(validate_dashboard(&req("no_such_command", None)).is_err());
+        let mut bad = req("stop", None);
+        bad.robot_id = "  ".to_string();
+        assert!(validate_dashboard(&bad).is_err());
+    }
 }
