@@ -55,3 +55,70 @@ pub fn vector_label(ui: &mut egui::Ui, label: &str, values: &[f64]) {
     };
     field(ui, label, &text);
 }
+
+/// Width of the label column in a [`kv`] row.
+///
+/// Every read-only row in the robot tab uses the same one, so the values line up
+/// down a single edge instead of each row finding its own.
+pub const KV_LABEL_WIDTH: f32 = 78.0;
+
+/// Lay `add` out inside a slot of exactly `width`, whatever it draws.
+///
+/// `allocate_ui_with_layout` on its own allocates whatever the contents turn
+/// out to need, so the width has to be pinned from the inside with
+/// `set_min_width`; the `max_rect` it hands down is what keeps a truncating
+/// label from spilling back out.
+pub fn fixed_slot(ui: &mut egui::Ui, width: f32, add: impl FnOnce(&mut egui::Ui)) {
+    let size = egui::vec2(width, ui.spacing().interact_size.y);
+    ui.allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.set_min_width(width);
+        add(ui);
+    });
+}
+
+/// One full-width row of exactly the standard row height, drawn whether or not
+/// `add` puts anything in it.
+///
+/// This is what a warning that comes and goes belongs in: the line is paid for
+/// on every frame, so the widgets underneath it do not move the moment the
+/// warning appears - which, for a row of buttons, means moving out from under
+/// the pointer that was already aimed at one.
+pub fn reserved_line(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
+    let height = ui.spacing().interact_size.y;
+    let size = egui::vec2(ui.available_width(), height);
+    ui.allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.set_min_height(height);
+        add(ui);
+    });
+}
+
+/// A label and its value on one row, the label in a fixed-width slot and the
+/// value truncated rather than wrapped.
+///
+/// Truncation is the point: a long driver message wrapping onto a second line
+/// would change the height of the block it is in, and everything below it would
+/// slide. The full text is on the hover instead.
+pub fn kv(ui: &mut egui::Ui, label: &str, value: egui::RichText, hover: &str) {
+    ui.horizontal(|ui| {
+        fixed_slot(ui, KV_LABEL_WIDTH, |ui| {
+            ui.label(egui::RichText::new(label).weak());
+        });
+        let response = ui.add(egui::Label::new(value).truncate());
+        if !hover.is_empty() {
+            response.on_hover_text(hover);
+        }
+    });
+}
+
+/// The value cell for a string the driver may not have published yet.
+///
+/// The driver writes the literal `UNKNOWN` for "not measured", so that and an
+/// empty string are the same fact and are drawn the same way - as a dash, which
+/// keeps the row the same height as a filled one.
+pub fn cell(value: &str) -> egui::RichText {
+    if value.is_empty() || value == "UNKNOWN" {
+        egui::RichText::new("—").monospace().color(UNKNOWN)
+    } else {
+        egui::RichText::new(value).monospace()
+    }
+}

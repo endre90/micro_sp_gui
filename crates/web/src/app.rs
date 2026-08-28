@@ -3,6 +3,7 @@
 
 use crate::api::{Api, Connection};
 use crate::tabs;
+use crate::widgets::fixed_slot;
 
 /// Width reserved for the connection indicator in the header.
 ///
@@ -188,18 +189,4 @@ impl App {
             }
         });
     }
-}
-
-/// Lay `add` out inside a slot of exactly `width`, whatever it draws.
-///
-/// `allocate_ui_with_layout` on its own allocates whatever the contents turn
-/// out to need, so the width has to be pinned from the inside with
-/// `set_min_width`; the `max_rect` it hands down is what keeps a truncating
-/// label from spilling back out.
-fn fixed_slot(ui: &mut egui::Ui, width: f32, add: impl FnOnce(&mut egui::Ui)) {
-    let size = egui::vec2(width, ui.spacing().interact_size.y);
-    ui.allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Center), |ui| {
-        ui.set_min_width(width);
-        add(ui);
-    });
 }
