@@ -136,10 +136,33 @@ is opt-in. Both show the same read-only pipeline: current goal and its state, pl
 the plan with the current step marked, and the incoming and scheduled queues as read back out of
 Redis.
 
+**Production** — what the cell has produced, and how fast. This one has no
+hardcoded knowledge of any cell: it renders whatever the state publishes under
+`kpi_`, by convention.
+
+* `kpi_<group>_<name>` is one figure. Groups become sections, ordered
+  `current`, `rate`, `run`, `total`, then anything else alphabetically.
+* A `_ms` suffix is rendered as a duration (`812ms` / `12.3s` / `4m 12s` /
+  `1h 04m 12s`) and an `_at` suffix, or any `Time` value, as wall-clock time in
+  *your* timezone — hover for the full timestamp and for the unrounded number.
+* `kpi_log_*` holding an array of maps becomes a table: one row per entry, one
+  column per key, in the order the map was built (a `Map` keeps its insertion
+  order, so that is the order the publisher designed the record to be read in).
+
+So a publisher adds a figure by naming a variable, with no change here. Nothing
+in this tab writes: production figures are a record of what happened, and a text
+field that lets an operator retype yesterday's pallet count is worse than no
+text field. If nothing publishes the convention the tab says what it is looking
+for rather than drawing a blank panel.
+
+`campx_delidding`'s `metrics` service is the first publisher — pallets handled,
+straps cut, top covers, boxes and lids by type, per-pallet cycle and per-stage
+times.
+
 ## Tests
 
 ```bash
-cargo test --workspace          # 39 tests, no Redis needed
+cargo test --workspace          # 56 tests, no Redis needed
 cargo clippy --workspace --all-targets
 cargo check -p micro_sp_gui_web --target wasm32-unknown-unknown --lib
 ```

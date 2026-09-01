@@ -25,6 +25,7 @@ enum Tab {
     Logs,
     Goals,
     Orders,
+    Production,
 }
 
 pub struct App {
@@ -36,6 +37,7 @@ pub struct App {
     logs_tab: tabs::logs::LogsTab,
     goals_tab: tabs::goals::GoalsTab,
     orders_tab: tabs::orders::OrdersTab,
+    production_tab: tabs::production::ProductionTab,
 }
 
 impl App {
@@ -49,6 +51,7 @@ impl App {
             logs_tab: Default::default(),
             goals_tab: Default::default(),
             orders_tab: Default::default(),
+            production_tab: Default::default(),
         }
     }
 }
@@ -68,6 +71,7 @@ impl eframe::App for App {
             Tab::Logs => self.logs_tab.ui(ui, &mut self.api),
             Tab::Goals => self.goals_tab.ui(ui, &mut self.api),
             Tab::Orders => self.orders_tab.ui(ui, &mut self.api),
+            Tab::Production => self.production_tab.ui(ui, &mut self.api),
         });
     }
 }
@@ -91,6 +95,7 @@ impl App {
             ui.selectable_value(&mut self.tab, Tab::Logs, "Logs");
             ui.selectable_value(&mut self.tab, Tab::Goals, "Goals");
             ui.selectable_value(&mut self.tab, Tab::Orders, "Orders");
+            ui.selectable_value(&mut self.tab, Tab::Production, "Production");
         });
     }
 

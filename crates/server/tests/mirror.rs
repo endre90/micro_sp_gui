@@ -73,6 +73,26 @@ fn every_variant() -> Vec<SPValue> {
             ),
         ])),
         SPValue::Map(MapOrUnknown::UNKNOWN),
+        // An array of maps: the shape a table of records comes in, and the one
+        // combination the two nesting cases above do not reach - an Array arm
+        // recursing into a Map arm. The Production tab renders exactly this.
+        SPValue::Array(ArrayOrUnknown::Array(vec![
+            SPValue::Map(MapOrUnknown::Map(vec![
+                (
+                    SPValue::String(StringOrUnknown::String("id".to_string())),
+                    SPValue::Int64(IntOrUnknown::Int64(1)),
+                ),
+                (
+                    SPValue::String(StringOrUnknown::String("at".to_string())),
+                    SPValue::Time(TimeOrUnknown::Time(UNIX_EPOCH + Duration::new(7, 8))),
+                ),
+                (
+                    SPValue::String(StringOrUnknown::String("ok".to_string())),
+                    SPValue::Bool(BoolOrUnknown::Bool(true)),
+                ),
+            ])),
+            SPValue::Map(MapOrUnknown::Map(vec![])),
+        ])),
         SPValue::Transform(TransformOrUnknown::Transform(stamped)),
         SPValue::Transform(TransformOrUnknown::UNKNOWN),
     ]
