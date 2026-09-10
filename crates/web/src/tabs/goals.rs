@@ -145,7 +145,8 @@ impl GoalsTab {
 
             if api.sp_id.is_none() {
                 ui.label(
-                    egui::RichText::new("no sp_id to send to").color(widgets::WARN),
+                    egui::RichText::new("the server has no SP_INSTANCE_ID to send to")
+                        .color(widgets::WARN),
                 );
             }
         });
@@ -158,7 +159,8 @@ pub fn status_panel(ui: &mut egui::Ui, api: &mut Api) {
     let Some(status) = api.goals_status().cloned() else {
         ui.label(
             egui::RichText::new(
-                "No micro_sp runner found in Redis. Start one, or pass --sp-id to the server.",
+                "Nothing to show. Either the server has no SP_INSTANCE_ID, or that runner has \
+                 not written its variables yet.",
             )
             .weak(),
         );

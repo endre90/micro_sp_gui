@@ -72,7 +72,9 @@ pub struct Api {
     pub robots: BTreeMap<String, proto::RobotStatus>,
     pub goals: BTreeMap<String, proto::GoalsStatus>,
 
-    /// Which system the tabs are looking at. `None` until discovery reports one.
+    /// Which system the tabs are looking at. Mirrors the server's `SP_INSTANCE_ID` /
+    /// `ROBOT_ID`; `None` until the first `Hello`, and after it when the server
+    /// was started without them.
     pub sp_id: Option<String>,
     pub robot_id: Option<String>,
 
@@ -227,14 +229,10 @@ impl Api {
     fn apply(&mut self, msg: proto::ServerMsg) {
         match msg {
             proto::ServerMsg::Hello(info) => {
-                // Keep a selection the operator made; otherwise take the first
-                // system that exists.
-                if self.sp_id.as_ref().is_none_or(|id| !info.sp_ids.contains(id)) {
-                    self.sp_id = info.sp_ids.first().cloned();
-                }
-                if self.robot_id.as_ref().is_none_or(|id| !info.robot_ids.contains(id)) {
-                    self.robot_id = info.robot_ids.first().cloned();
-                }
+                // There is nothing to choose: the server is configured with one
+                // sp_id and one robot, and these follow it.
+                self.sp_id = info.sp_id.clone();
+                self.robot_id = info.robot_id.clone();
                 self.info = info;
             }
             proto::ServerMsg::State(snapshot) => {
