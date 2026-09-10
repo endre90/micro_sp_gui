@@ -100,14 +100,17 @@ impl WriteReport {
     }
 }
 
-/// What the server is connected to and what it found there.
+/// What the server is connected to and which system it was told to look at.
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct ServerInfo {
     pub redis_addr: String,
-    /// Discovered `sp_id`s - see `crates/server/src/discovery.rs`.
-    pub sp_ids: Vec<String>,
-    /// Discovered robot ids, i.e. `ur_redis_driver` instances.
-    pub robot_ids: Vec<String>,
+    /// The micro_sp instance the whole GUI addresses, from the server's
+    /// `SP_INSTANCE_ID`. `None` when it is unset, which disables every write that needs
+    /// one. There is no discovery: guessing this from the keyspace once queued
+    /// goals onto a SOP's key instead of the runner's.
+    pub sp_id: Option<String>,
+    /// The `ur_redis_driver` instance, from the server's `ROBOT_ID`.
+    pub robot_id: Option<String>,
     /// `None` when no activity-log directory is configured or readable.
     pub log_dir: Option<String>,
     /// `None` when transform export is not configured.

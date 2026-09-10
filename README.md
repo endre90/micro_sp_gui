@@ -85,8 +85,8 @@ environment variable:
 | `--log-stem` | `MICRO_SP_GUI_LOG_STEM` | `micro_sp` | log file base name |
 | `--log-ring` | `MICRO_SP_GUI_LOG_RING` | `20000` | lines kept for backfill |
 | `--frames-dir` | `MICRO_SP_GUI_FRAMES_DIR` | — | where the Transforms tab exports frame JSON |
-| `--sp-id` | `SP_ID` | — | seed the sp_id picker before discovery finds one |
-| `--robot-id` | `ROBOT_ID` | — | seed the robot picker |
+| `--sp-instance-id` | `SP_INSTANCE_ID` | — | the micro_sp instance the whole GUI addresses, e.g. `sp1` |
+| `--robot-id` | `ROBOT_ID` | — | the `ur_redis_driver` instance the Robot tab addresses, e.g. `r1` |
 
 > **There is no authentication.** The server exposes unrestricted state writes and robot commands.
 > Bind it to localhost or a trusted network.
