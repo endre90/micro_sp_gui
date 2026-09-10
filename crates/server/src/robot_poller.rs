@@ -13,7 +13,8 @@
 //! loops writing it would leave the slower one overwriting the faster one with
 //! stale values, and both would republish forever.
 //!
-//! Which robot that is, is the server's `ROBOT_ID`; nothing here infers it.
+//! Discovery stays in the main poller. This one only reads the robot ids it
+//! already found.
 
 use crate::status::{self, Entries};
 use crate::{AppState, LOG_TARGET};
@@ -58,11 +59,13 @@ pub async fn run(state: Arc<AppState>) {
     loop {
         ticker.tick().await;
 
-        let Some(robot_id) = state.cfg.robot_id() else {
+        let robot_ids = state.snapshot.read().await.info.robot_ids.clone();
+        if robot_ids.is_empty() {
             continue;
-        };
+        }
 
-        let keys: Vec<String> = status::robot_keys(&robot_id);
+        let keys: Vec<String> =
+            robot_ids.iter().flat_map(|id| status::robot_keys(id)).collect();
 
         let entries = match read_keys(&mut con, &keys).await {
             Ok(entries) => entries,
@@ -78,8 +81,10 @@ pub async fn run(state: Arc<AppState>) {
         };
         last_error = None;
 
-        let robots: BTreeMap<String, proto::RobotStatus> =
-            [(robot_id.clone(), status::robot_status(&entries, &robot_id))].into();
+        let robots: BTreeMap<String, proto::RobotStatus> = robot_ids
+            .iter()
+            .map(|id| (id.clone(), status::robot_status(&entries, id)))
+            .collect();
 
         // Work out what to announce, then release the lock before publishing.
         let mut messages: Vec<proto::ServerMsg> = Vec::new();

@@ -95,7 +95,7 @@ pub struct RobotTab {
 
 impl RobotTab {
     pub fn ui(&mut self, ui: &mut egui::Ui, api: &mut Api) {
-        // The server's ROBOT_ID owns which robot we are talking to.
+        // The header picker owns which robot we are talking to.
         if let Some(id) = &api.robot_id
             && *id != self.cmd.robot_id
         {
@@ -129,8 +129,8 @@ impl RobotTab {
         widgets::reserved_line(ui, |ui| {
             let text = if api.robot_id.is_none() {
                 egui::RichText::new(
-                    "The server has no ROBOT_ID. Set it (or --robot-id) and restart \
-                     the server to address a ur_redis_driver instance.",
+                    "No robot interface found in Redis. Start ur_redis_driver, or pass \
+                     --robot-id to the server to address one that has not seeded its keys yet.",
                 )
                 .color(widgets::WARN)
             } else if status.is_none() {

@@ -11,6 +11,7 @@ pub mod api_transforms;
 pub mod app_state;
 pub mod config;
 pub mod convert;
+pub mod discovery;
 pub mod logs;
 pub mod poller;
 pub mod robot_poller;

@@ -11,10 +11,10 @@
 //!   all; a busy one sends only the keys that moved.
 
 use crate::status::{self, Entries};
-use crate::{AppState, LOG_TARGET, convert};
+use crate::{AppState, LOG_TARGET, convert, discovery};
 use micro_sp::*;
 use micro_sp_gui_protocol as proto;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
 /// How many keys to ask for per `SCAN` round trip.
@@ -157,23 +157,26 @@ pub async fn run(state: Arc<AppState>) {
 
         let transforms = read_transforms(&mut con).await;
 
-        // Which system this is, is configuration, not something to infer from
-        // the keyspace.
-        let sp_id = state.cfg.sp_id();
+        let key_set: BTreeSet<String> = entries.keys().cloned().collect();
+        let (sp_ids, robot_ids) = discovery::discover(
+            &key_set,
+            state.cfg.sp_id.as_deref(),
+            state.cfg.robot_id.as_deref(),
+        );
 
         // Robot status is *not* derived here: `robot_poller` owns it, on a much
         // shorter period. Computing it in both loops would leave this one
         // overwriting the fresh values with quarter-second-old ones, and the two
         // would republish against each other forever.
-        let goals: BTreeMap<String, proto::GoalsStatus> = sp_id
+        let goals: BTreeMap<String, proto::GoalsStatus> = sp_ids
             .iter()
             .map(|id| (id.clone(), status::goals_status(&entries, id)))
             .collect();
 
         let info = proto::ServerInfo {
             redis_addr: state.cm.redis_addr().to_string(),
-            sp_id,
-            robot_id: state.cfg.robot_id(),
+            sp_ids,
+            robot_ids,
             log_dir: state
                 .cfg
                 .log_dir
@@ -216,8 +219,8 @@ pub async fn run(state: Arc<AppState>) {
             }
             snap.goals = goals;
 
-            if snap.info.sp_id != info.sp_id
-                || snap.info.robot_id != info.robot_id
+            if snap.info.sp_ids != info.sp_ids
+                || snap.info.robot_ids != info.robot_ids
                 || snap.info.redis_addr != info.redis_addr
                 || snap.info.log_dir != info.log_dir
             {
