@@ -136,6 +136,8 @@ is opt-in. Both show the same read-only pipeline: current goal and its state, pl
 the plan with the current step marked, and the incoming and scheduled queues as read back out of
 Redis.
 
+asdf
+
 **Production** — what the cell has produced, and how fast. This one has no
 hardcoded knowledge of any cell: it renders whatever the state publishes under
 `kpi_`, by convention.
