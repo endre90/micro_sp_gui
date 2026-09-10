@@ -9,11 +9,17 @@ use std::collections::BTreeSet;
 /// Variables only a micro_sp runner creates. `_dashboard_command` is
 /// deliberately **not** in this list: `ur_redis_driver` seeds
 /// `{robot}_dashboard_command` too, so it would report every robot as an sp_id.
+///
+/// `_sop_state` is deliberately **not** in this list either. A runner does have
+/// `{sp_id}_sop_state`, but every individual SOP gets a `sop_{name}_sop_state`
+/// key of its own, so the marker reported one phantom sp_id per SOP - and since
+/// the list is sorted, `sop_...` sorted ahead of `sp1` and became the default
+/// selection, which is where goals were then queued. It is redundant anyway:
+/// `generate_runner_state_variables` creates all four markers below together.
 const SP_MARKERS: &[&str] = &[
     "_planner_state",
     "_main_runner_information",
     "_goal_runner_information",
-    "_sop_state",
     "_plan_runner_information",
 ];
 
@@ -97,6 +103,23 @@ mod tests {
         let (sps, robots) = discover(&k, None, None);
         assert!(sps.is_empty(), "expected no sp_ids, got {sps:?}");
         assert_eq!(robots, vec!["r1".to_string()]);
+    }
+
+    /// Each SOP has its own `sop_{name}_sop_state` key. Those are not runners,
+    /// and they used to sort ahead of `sp1` and win the default selection.
+    #[test]
+    fn a_sop_is_never_reported_as_an_sp_id() {
+        let k = keys(&[
+            "sop_housekeeping_sop_state",
+            "sop_mount_gripper_sop_state",
+            "sp1_sop_state",
+            "sp1_planner_state",
+            "sp1_main_runner_information",
+            "sp1_goal_runner_information",
+            "sp1_plan_runner_information",
+        ]);
+        let (sps, _) = discover(&k, None, None);
+        assert_eq!(sps, vec!["sp1".to_string()]);
     }
 
     /// Half an interface is not an interface.
