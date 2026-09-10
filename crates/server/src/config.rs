@@ -55,10 +55,7 @@ pub struct Config {
     /// The micro_sp instance this GUI addresses, e.g. `sp1`. Every `{sp_id}_*`
     /// key the GUI reads or writes - goals included - is built from it. Without
     /// it the tabs that need an sp_id say so and refuse to write.
-    // `SP_INSTANCE_ID` is the name the runners already use, so one variable
-    // covers the whole system. The field is `sp_id` because that is what the key
-    // prefix is called everywhere else in the code.
-    #[arg(long = "sp-instance-id", env = "SP_INSTANCE_ID", value_name = "SP_INSTANCE_ID")]
+    #[arg(long, env = "SP_ID")]
     pub sp_id: Option<String>,
 
     /// The `ur_redis_driver` instance the Robot tab addresses, e.g. `r1`.
@@ -73,7 +70,7 @@ impl Config {
     }
 
     /// The configured ids, with whitespace and the empty case folded away: a
-    /// bare `SP_INSTANCE_ID=` in an env file means unset, not an empty prefix.
+    /// bare `SP_ID=` in an env file means unset, not an empty prefix.
     pub fn sp_id(&self) -> Option<String> {
         non_blank(self.sp_id.as_deref())
     }

@@ -135,7 +135,7 @@ impl App {
 
     /// Which system the whole GUI is addressing.
     ///
-    /// Not a picker: the server is configured with one `SP_INSTANCE_ID` and one
+    /// Not a picker: the server is configured with one `SP_ID` and one
     /// `ROBOT_ID` and every key is built from those, so there is nothing here
     /// for the operator to choose - and nothing to guess wrong. Drawn into a
     /// fixed-width slot so the tab bar does not shift when the first `Hello`
@@ -154,7 +154,7 @@ impl App {
                     format!(
                         "The server was started without {}. Set it and restart the \
                          server; the tabs that need it cannot write until then.",
-                        if which == "sp_id" { "SP_INSTANCE_ID" } else { "ROBOT_ID" }
+                        if which == "sp_id" { "SP_ID" } else { "ROBOT_ID" }
                     ),
                 );
             }

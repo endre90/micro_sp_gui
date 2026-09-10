@@ -105,7 +105,7 @@ impl WriteReport {
 pub struct ServerInfo {
     pub redis_addr: String,
     /// The micro_sp instance the whole GUI addresses, from the server's
-    /// `SP_INSTANCE_ID`. `None` when it is unset, which disables every write that needs
+    /// `SP_ID`. `None` when it is unset, which disables every write that needs
     /// one. There is no discovery: guessing this from the keyspace once queued
     /// goals onto a SOP's key instead of the runner's.
     pub sp_id: Option<String>,

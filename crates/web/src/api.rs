@@ -72,7 +72,7 @@ pub struct Api {
     pub robots: BTreeMap<String, proto::RobotStatus>,
     pub goals: BTreeMap<String, proto::GoalsStatus>,
 
-    /// Which system the tabs are looking at. Mirrors the server's `SP_INSTANCE_ID` /
+    /// Which system the tabs are looking at. Mirrors the server's `SP_ID` /
     /// `ROBOT_ID`; `None` until the first `Hello`, and after it when the server
     /// was started without them.
     pub sp_id: Option<String>,

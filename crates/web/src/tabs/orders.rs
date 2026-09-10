@@ -91,7 +91,7 @@ impl OrdersTab {
             ui.label(egui::RichText::new(format!("{total} item(s)")).weak());
             if api.sp_id.is_none() {
                 ui.label(
-                    egui::RichText::new("the server has no SP_INSTANCE_ID to send to")
+                    egui::RichText::new("the server has no SP_ID to send to")
                         .color(widgets::WARN),
                 );
             }
