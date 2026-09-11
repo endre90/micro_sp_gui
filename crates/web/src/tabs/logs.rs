@@ -363,9 +363,10 @@ fn kind_colour(kind: proto::LogKind) -> egui::Color32 {
     }
 }
 
-/// One line, in the same five columns the file has: timestamp, tag, source,
-/// subject, detail. Coloured by kind, with the state change - or the severity of
-/// a mirrored console line - picked out.
+/// One line. An event keeps the five columns the file has - timestamp, tag,
+/// source, subject, detail - while a mirrored console line drops the two that
+/// only say where it was printed from, leaving the message. Coloured by kind,
+/// with the state change - or the severity of a console line - picked out.
 fn log_row(ui: &mut egui::Ui, line: &proto::LogLine) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 6.0;
@@ -389,22 +390,28 @@ fn log_row(ui: &mut egui::Ui, line: &proto::LogLine) {
                 .color(kind_colour(line.kind))
                 .strong(),
         );
-        ui.label(egui::RichText::new(&line.source).monospace().weak());
-        // For a console line the subject is the `file:line` that printed it -
-        // useful, but not the point of the row, so it stays out of the way.
-        let subject = egui::RichText::new(&line.subject).monospace();
-        ui.label(if line.kind.is_console() { subject.weak() } else { subject });
+        // A console line's source and subject are only where it was printed
+        // from - the `log` target and the statement's `file:line`. That is
+        // noise in front of the message, so it moves to the row's hover text.
+        // An event's are the runner and the thing it acted on: the row.
+        if !line.kind.is_console() {
+            ui.label(egui::RichText::new(&line.source).monospace().weak());
+            ui.label(egui::RichText::new(&line.subject).monospace());
+        }
 
         // Details can carry SGR escapes when a logged value came from a
         // coloured console string.
-        if line.detail.contains('\u{1b}') {
+        let detail = if line.detail.contains('\u{1b}') {
             ui.label(ansi_to_layout_job(
                 &line.detail,
                 ui.text_style_height(&egui::TextStyle::Monospace) * 0.85,
                 ui.visuals().text_color(),
-            ));
+            ))
         } else {
-            ui.label(egui::RichText::new(&line.detail).monospace().color(detail_colour(line)));
+            ui.label(egui::RichText::new(&line.detail).monospace().color(detail_colour(line)))
+        };
+        if line.kind.is_console() {
+            detail.on_hover_text(format!("{} {}", line.source, line.subject));
         }
     });
 }
