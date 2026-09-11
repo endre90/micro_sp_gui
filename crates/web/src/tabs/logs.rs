@@ -363,10 +363,10 @@ fn kind_colour(kind: proto::LogKind) -> egui::Color32 {
     }
 }
 
-/// One line. An event keeps the five columns the file has - timestamp, tag,
-/// source, subject, detail - while a mirrored console line drops the two that
-/// only say where it was printed from, leaving the message. Coloured by kind,
-/// with the state change - or the severity of a console line - picked out.
+/// One line, in the same five columns the file has: timestamp, tag, source,
+/// subject, detail - with a console line's target and location shortened to
+/// their last segment, so they read like an event's. Coloured by kind, with the
+/// state change - or the severity of a mirrored console line - picked out.
 fn log_row(ui: &mut egui::Ui, line: &proto::LogLine) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 6.0;
@@ -390,14 +390,16 @@ fn log_row(ui: &mut egui::Ui, line: &proto::LogLine) {
                 .color(kind_colour(line.kind))
                 .strong(),
         );
-        // A console line's source and subject are only where it was printed
-        // from - the `log` target and the statement's `file:line`. That is
-        // noise in front of the message, so it moves to the row's hover text.
-        // An event's are the runner and the thing it acted on: the row.
-        if !line.kind.is_console() {
-            ui.label(egui::RichText::new(&line.source).monospace().weak());
-            ui.label(egui::RichText::new(&line.subject).monospace());
-        }
+        // A console line whose statement set no `target:` gets the module path
+        // it was written in - `micro_sp::running::process_operation` - where a
+        // runner's own target is a plain name like `sp_operation_runner`. Show
+        // the last segment of either, so the column reads the same for both.
+        ui.label(egui::RichText::new(short_source(&line.source)).monospace().weak());
+        // For a console line the subject is the `file:line` that printed it -
+        // useful, but not the point of the row, so it stays out of the way,
+        // and its directories go the same way as the target's path.
+        let subject = egui::RichText::new(short_subject(line)).monospace();
+        ui.label(if line.kind.is_console() { subject.weak() } else { subject });
 
         // Details can carry SGR escapes when a logged value came from a
         // coloured console string.
@@ -410,10 +412,27 @@ fn log_row(ui: &mut egui::Ui, line: &proto::LogLine) {
         } else {
             ui.label(egui::RichText::new(&line.detail).monospace().color(detail_colour(line)))
         };
+        // Nothing is lost: the untrimmed target and location are one hover away.
         if line.kind.is_console() {
-            detail.on_hover_text(format!("{} {}", line.source, line.subject));
+            detail.on_hover_text(format!("{}\n{}", line.source, line.subject));
         }
     });
+}
+
+/// The last `::` segment of a `log` target, which is what a module-path target
+/// has in common with a runner's hand-written one.
+fn short_source(source: &str) -> &str {
+    source.rsplit("::").next().unwrap_or(source)
+}
+
+/// The subject as the row shows it: a console line's `file:line` loses the
+/// directories leading to it, an event's subject is a name and is left alone.
+fn short_subject(line: &proto::LogLine) -> &str {
+    if line.kind.is_console() {
+        line.subject.rsplit('/').next().unwrap_or(&line.subject)
+    } else {
+        &line.subject
+    }
 }
 
 /// Terminal outcomes are worth spotting in a wall of text.
